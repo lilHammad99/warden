@@ -1,0 +1,16 @@
+ollama
+pyyaml
+requests
+ddgs
+psutil
+pyttsx3
+sounddevice
+numpy
+opencv-python
+mss
+pycaw
+comtypes
+faster-whisper
+openwakeword
+ultralytics
+playwright

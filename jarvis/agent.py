@@ -1,0 +1,93 @@
+"""The brain: an Ollama tool-calling loop.
+
+User text goes in, the local model decides whether to answer directly or
+call tools; tool results are fed back until it produces a final answer.
+"""
+
+import json
+import threading
+
+import ollama
+
+from .config import DESKTOP, HOME
+from .tools import registry
+
+SYSTEM_PROMPT = f"""You are Jarvis, a local AI assistant running on the user's Windows PC,
+inspired by Iron Man's J.A.R.V.I.S. Address the user as "sir".
+
+Rules:
+- Be concise. Answers are often spoken aloud, so keep replies short and
+  natural. No markdown, no emojis, no bullet lists unless asked.
+- You have tools. USE them to actually do things instead of explaining how.
+  When asked to write a file/essay/note, call write_file with the FULL text.
+- The user's home folder is {HOME} and their Desktop is {DESKTOP}.
+- "start working" or "watch the camera" means: call start_working.
+  "stop working" means: call stop_working.
+  "what do you see" means: call describe_view.
+- If a tool returns an error, tell the user briefly what went wrong.
+- Only answer from web_search results when asked about news/weather/current
+  facts; otherwise answer from your own knowledge.
+"""
+
+MAX_TOOL_ROUNDS = 8
+
+
+class Agent:
+    def __init__(self, model: str):
+        self.model = model
+        self.messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.lock = threading.Lock()  # console + voice threads share one brain
+
+    def _call_model(self, messages):
+        try:
+            return ollama.chat(
+                model=self.model,
+                messages=messages,
+                tools=registry.specs(),
+                think=False,
+                options={"num_ctx": 8192},
+            )
+        except TypeError:  # older ollama lib without `think`
+            return ollama.chat(
+                model=self.model,
+                messages=messages,
+                tools=registry.specs(),
+                options={"num_ctx": 8192},
+            )
+
+    def chat(self, user_text: str, status=lambda s: None) -> str:
+        with self.lock:
+            self.messages.append({"role": "user", "content": user_text})
+            for _ in range(MAX_TOOL_ROUNDS):
+                response = self._call_model(self.messages)
+                msg = response["message"]
+                tool_calls = msg.get("tool_calls")
+                if not tool_calls:
+                    content = (msg.get("content") or "").strip()
+                    self.messages.append({"role": "assistant", "content": content})
+                    self._trim_history()
+                    return content or "Done, sir."
+                self.messages.append(
+                    {"role": "assistant", "content": msg.get("content") or "",
+                     "tool_calls": tool_calls}
+                )
+                for call in tool_calls:
+                    fn = call["function"]
+                    name = fn["name"]
+                    args = fn.get("arguments") or {}
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    status(f"[{name}]")
+                    result = registry.dispatch(name, args)
+                    self.messages.append(
+                        {"role": "tool", "content": result, "tool_name": name}
+                    )
+            self._trim_history()
+            return "I got stuck in a tool loop, sir. Please try rephrasing."
+
+    def _trim_history(self, keep: int = 40):
+        if len(self.messages) > keep:
+            self.messages = [self.messages[0]] + self.messages[-(keep - 1):]

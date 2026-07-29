@@ -1,0 +1,24 @@
+models:
+  chat: qwen3:8b
+  vision: qwen2.5vl:3b
+
+cameras:
+  # name: OpenCV index (webcam) or RTSP URL (IP camera)
+  webcam: 0
+  # front_door: rtsp://user:password@192.168.1.50:554/stream1
+default_camera: webcam
+
+watch:
+  alert_cooldown_seconds: 30
+  snapshot_dir: data/snapshots
+  person_confidence: 0.5
+
+voice:
+  enabled: true
+  wake_word: hey_jarvis_v0.1
+  stt_model: small
+  stt_language: en
+
+apps:
+  # extra app aliases -> command to launch (merged with built-ins)
+  # spotify: spotify
