@@ -9,7 +9,7 @@ BANNER = r"""
   _  | |/ _ \ | |_) \ \ / / | |\___ \
  | |_| / ___ \|  _ < \ V /  | | ___) |
   \___/_/   \_\_| \_\ \_/  |___|____/
-        local · private · yours
+        local - private - yours
 """
 
 
@@ -51,7 +51,7 @@ def main():
 
     while True:
         try:
-            text = input("you> ").strip()
+            text = input("you> ").strip().lstrip("﻿").strip()
         except (EOFError, KeyboardInterrupt):
             text = "exit"
         if not text:

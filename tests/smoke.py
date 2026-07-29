@@ -68,7 +68,8 @@ def t_vision():
     from jarvis.vision.describe import describe_frame
     cfg = c.load()
     m = CameraManager(cfg["cameras"], cfg["default_camera"])
-    check("vision describe", lambda: describe_frame(m.grab_frame(), cfg["models"]["vision"]))
+    check("vision describe", lambda: describe_frame(
+        m.grab_frame(), cfg["models"]["vision"], unload=cfg["models"]["chat"]))
 
 
 def t_tts():
@@ -83,8 +84,45 @@ def t_tts():
     check("tts speak", speak)
 
 
+def t_watch():
+    from jarvis import config as c
+    from jarvis.vision.cameras import CameraManager
+    cfg = c.load()
+    m = CameraManager(cfg["cameras"], cfg["default_camera"])
+    def yolo():
+        from ultralytics import YOLO
+        frame = m.grab_frame()
+        results = YOLO("yolov8n.pt").predict(frame, classes=[0], conf=0.5, verbose=False)
+        return f"persons detected: {sum(len(r.boxes) for r in results)}"
+    check("yolo person detection", yolo)
+
+
+def t_e2e():
+    import os
+    from jarvis import config as c
+    from jarvis.agent import Agent
+    from jarvis.tools import apps, files, system, web  # noqa: F401
+    from jarvis.tools import camera
+    cfg = c.load()
+    camera.init(cfg, None)
+    a = Agent(cfg["models"]["chat"])
+    target = os.path.join(os.path.expanduser("~"), "Desktop", "jarvis_test_note.txt")
+    if os.path.exists(target):
+        os.remove(target)
+    check("e2e write file", lambda: a.chat(
+        "make a file on my desktop called jarvis_test_note.txt containing a "
+        "two line hello note"))
+    check("e2e file exists", lambda: f"exists={os.path.exists(target)}" if os.path.exists(target)
+          else (_ for _ in ()).throw(AssertionError(f"{target} missing")))
+    check("e2e start working", lambda: a.chat("start working"))
+    import time; time.sleep(3)
+    check("e2e stop working", lambda: a.chat("stop working"))
+    camera.shutdown()
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "agent": t_agent,
-            "camera": t_camera, "vision": t_vision, "tts": t_tts}
+            "camera": t_camera, "vision": t_vision, "tts": t_tts,
+            "watch": t_watch, "e2e": t_e2e}
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "safe"

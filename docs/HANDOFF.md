@@ -20,20 +20,23 @@ reference only — do not touch them.
 - Dev machine: consumer laptop, mid-range GPU, memory-constrained
 - git identity set locally (the user / you@example.com)
 
-## State when this file was written
+## State when this file was last updated (2026-07-29, end of build session)
 
-ALL CODE IS WRITTEN for all 4 phases, committed, but NOT YET TESTED,
-because these background jobs were still running:
+v1 COMPLETE AND SMOKE-TESTED. All downloads/installs done (qwen3:8b,
+moondream, pip deps, Chromium, wake-word models, Whisper small, YOLO
+weights). All smoke tests pass:
+imports/tools/agent/camera/vision/tts/watch/e2e — see `tests/smoke.py`.
+E2E verified: agent wrote a real Desktop file, started/stopped watch
+mode, browser opened+read+clicked pages, app boots with voice on.
 
-1. `ollama pull qwen3:8b` — main model (~5.2 GB)
-2. pip install into `.venv`: ollama pyyaml requests ddgs psutil pyttsx3
-   sounddevice numpy opencv-python mss pycaw comtypes faster-whisper
-   openwakeword ultralytics playwright
-3. After pip finishes, still TODO:
-   - `.venv\Scripts\playwright install chromium` (browser binaries)
-   - `.venv\Scripts\python -c "import openwakeword.utils; openwakeword.utils.download_models()"`
-     (wake-word model files, needed once)
-   - YOLO weights (`yolov8n.pt`) auto-download on first watch-mode use
+IMPORTANT deviation from original design: vision model is `moondream`,
+NOT qwen2.5vl:3b — that one failed with "requires 8.4 GiB, available
+~7.2" on this dev machine. Also `describe_frame` unloads the chat
+model first and uses `keep_alive=0` (RAM can't hold both models).
+
+NOT yet human-tested: actually saying "Hey Jarvis" into the mic (init +
+mic-level verified only). First thing next session: have the user try voice,
+tune `ENERGY_THRESHOLD` in `jarvis/voice/stt.py` if needed.
 
 ## How to test (in order)
 

@@ -1,6 +1,8 @@
 models:
   chat: qwen3:8b
-  vision: qwen2.5vl:3b
+  # qwen2.5vl:3b is sharper but needs ~8.4 GB free RAM; moondream fits
+  # alongside other apps on a typical laptop. Swap back if you free up memory.
+  vision: moondream
 
 cameras:
   # name: OpenCV index (webcam) or RTSP URL (IP camera)

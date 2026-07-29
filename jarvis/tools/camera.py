@@ -93,7 +93,8 @@ def describe_view(camera: str | None = None, question: str | None = None) -> str
     from ..vision.describe import describe_frame
 
     frame = _state["manager"].grab_frame(camera)
-    return describe_frame(frame, _state["cfg"]["models"]["vision"], question)
+    return describe_frame(frame, _state["cfg"]["models"]["vision"], question,
+                          unload=_state["cfg"]["models"]["chat"])
 
 
 @tool(
