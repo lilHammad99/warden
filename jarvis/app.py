@@ -37,6 +37,7 @@ def main():
     from .tools import calc  # noqa: F401
     from .tools import camera  # noqa: F401
     from .tools import clipboard  # noqa: F401
+    from .tools import compare  # noqa: F401
     from .tools import convert  # noqa: F401
     from .tools import dates  # noqa: F401
     from .tools import disk  # noqa: F401
@@ -146,6 +147,7 @@ def main():
           "how big is my downloads folder / "
           "find duplicate files in my downloads / "
           "tell me about my resume.docx / "
+          "compare my draft.txt and final.txt / "
           "open my downloads folder / "
           "back up my documents into a zip / unzip my backup / "
           "delete that old draft to the recycle bin / "

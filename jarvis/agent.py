@@ -145,7 +145,14 @@ Rules:
   read-only", "what's the checksum of this download"), call file_info with the
   file path; it is read-only and returns the type, exact size, created/modified
   dates, read-only flag, line count for text, and the SHA-256 checksum. Use
-  file_info for a single file and folder_size for a whole folder.
+  file_info for a single file and folder_size for a whole folder. To compare TWO
+  text files and see what changed between them ("did this file change", "what's
+  different between my draft and the final", "compare config.yaml and
+  config.backup", "are these two notes the same"), call compare_files with file1
+  and file2; it is read-only and reports whether they are identical or different,
+  with how many lines were added/removed and a short preview of the changes. Use
+  file_info for facts about ONE file and compare_files for the differences
+  between TWO.
 - Reminders/timers: when the user wants to be told something at a LATER time
   ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
   17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)

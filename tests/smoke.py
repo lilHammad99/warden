@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-movefolder, copyfolder, makefolder, duplicates, fileinfo, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
+movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, textstats, spreadsheet, jsondata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, duplicates, explorer, extract, fileinfo, files, find, jsondata, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, explorer, extract, fileinfo, files, find, jsondata, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -1325,6 +1325,140 @@ def t_fileinfo():
     finally:
         os.chmod(ro, _stat.S_IWRITE)  # let cleanup remove the read-only file
         shutil.rmtree(sandbox, onerror=_rm, ignore_errors=True)
+
+
+def t_compare():
+    """Exercises the compare_files tool (diff two text files) + its defenses
+    against 8B hallucinations. Read-only, works entirely inside a temp tree in
+    the user's home, so it is deterministic, needs no model, and lives in the
+    safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import compare  # noqa: F401  (register compare_files)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_compare_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    (sandbox / "a.txt").write_text("line one\nline two\nline three\n", encoding="utf-8")
+    (sandbox / "b.txt").write_text("line one\nline TWO changed\nline three\nline four\n",
+                                   encoding="utf-8")
+    (sandbox / "same1.txt").write_text("hello\nworld\n", encoding="utf-8")
+    (sandbox / "same2.txt").write_text("hello\nworld\n", encoding="utf-8")
+    (sandbox / "pic.bin").write_bytes(b"\x00\x01BIN\x00data")   # NUL -> binary
+    (sandbox / "curly.txt").write_bytes("café “quote”\n".encode("utf-8"))
+    (sandbox / "plain.txt").write_bytes("cafe normal\n".encode("utf-8"))
+
+    try:
+        def different_files():
+            out = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/b.txt"})
+            assert "Error" not in out, out
+            assert "different" in out, out
+            # b has: 1 changed line (counts as +1 -1) plus 1 added line -> 2 added, 1 removed
+            assert "2 lines added" in out, out
+            assert "1 line removed" in out, out
+            assert "line four" in out, out            # the added line shows in the preview
+            assert "line two" in out, out             # the removed original shows too
+            out.encode("ascii")                        # pure ASCII
+            return "diff counts + preview correct"
+        check("compare_files different files", different_files)
+
+        def identical_content():
+            out = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/same1.txt", "file2": "jarvis_compare_smoke/same2.txt"})
+            assert "identical" in out and "Error" not in out, out
+            assert "added" not in out, out
+            return "identical content -> identical message"
+        check("compare_files identical content", identical_content)
+
+        def ascii_transliteration():
+            # a real UTF-8 file with curly quotes/accents must not crash or leak non-ASCII
+            out = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/curly.txt", "file2": "jarvis_compare_smoke/plain.txt"})
+            assert "Error" not in out, out
+            assert "different" in out, out
+            out.encode("ascii")                        # non-ASCII forced to ASCII
+            return "utf-8 files compared, output ascii"
+        check("compare_files ascii output", ascii_transliteration)
+
+        def same_file_twice():
+            out = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/a.txt"})
+            assert "same file" in out and "Error" not in out, out
+            return "same path twice -> friendly note"
+        check("compare_files same file twice", same_file_twice)
+
+        def alt_arg_names():
+            out = registry.dispatch("compare_files",
+                {"first": "jarvis_compare_smoke/a.txt", "second": "jarvis_compare_smoke/b.txt"})
+            assert "different" in out, out
+            out2 = registry.dispatch("compare_files",
+                {"old": "jarvis_compare_smoke/same1.txt", "new": "jarvis_compare_smoke/same2.txt"})
+            assert "identical" in out2, out2
+            return "alt first/second/old/new arg names handled"
+        check("compare_files alt arg names", alt_arg_names)
+
+        def binary_refused():
+            out = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/pic.bin", "file2": "jarvis_compare_smoke/a.txt"})
+            assert "binary" in out and "Error" in out, out
+            return "binary file refused"
+        check("compare_files binary refused", binary_refused)
+
+        def containment_guard():
+            r = registry.dispatch("compare_files",
+                {"file1": "C:\\Windows\\win.ini", "file2": "jarvis_compare_smoke/a.txt"})
+            assert "only work inside your own folders" in r, r
+            r2 = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/a.txt",
+                 "file2": "jarvis_compare_smoke/../../../Windows/win.ini"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked for both files"
+        check("compare_files containment guard", containment_guard)
+
+        def folder_and_missing():
+            r = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke", "file2": "jarvis_compare_smoke/a.txt"})
+            assert "is a folder" in r, r
+            r2 = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/nope.txt"})
+            assert "can't find" in r2, r2
+            return "folder source + missing file friendly messages"
+        check("compare_files folder/missing guards", folder_and_missing)
+
+        def size_cap():
+            saved = compare.MAX_FILE_BYTES
+            compare.MAX_FILE_BYTES = 5           # a.txt is > 5 bytes
+            try:
+                out = registry.dispatch("compare_files",
+                    {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/b.txt"})
+                assert "too big" in out and "Error" in out, out
+            finally:
+                compare.MAX_FILE_BYTES = saved
+            return "oversized file refused, not read whole"
+        check("compare_files size cap", size_cap)
+
+        def hallucination_guards():
+            assert "Error" in registry.dispatch("compare_files", {})               # missing both
+            assert "Error" in registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/a.txt"})                            # missing one
+            assert "Error" in registry.dispatch("compare_files", {"file1": "", "file2": ""})
+            # wrong types / weird shapes must not raise
+            registry.dispatch("compare_files", {"file1": 123, "file2": ["a"]})
+            registry.dispatch("compare_files", {"file1": {}, "file2": None})
+            # an unexpected extra arg is dropped, the call still succeeds
+            out = registry.dispatch("compare_files",
+                {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/b.txt",
+                 "reason": "curious"})
+            assert "different" in out, out
+            return "guards held"
+        check("compare_files hallucination guards", hallucination_guards)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
 
 
 def t_disk():
@@ -3394,7 +3528,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "recent": t_recent, "organize": t_organize,
             "movefolder": t_movefolder, "copyfolder": t_copyfolder,
             "makefolder": t_makefolder, "duplicates": t_duplicates,
-            "fileinfo": t_fileinfo,
+            "fileinfo": t_fileinfo, "compare": t_compare,
             "disk": t_disk, "document": t_document,
             "explorer": t_explorer,
             "archive": t_archive,
@@ -3414,7 +3548,7 @@ if __name__ == "__main__":
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
         t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder()
-        t_duplicates(); t_fileinfo(); t_disk()
+        t_duplicates(); t_fileinfo(); t_compare(); t_disk()
         t_document(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()

@@ -979,6 +979,49 @@
       the containment guard, and the empty-key / missing-file / wrong-type /
       alt-name / extra-arg guards. Full safe set: 249 checks, all PASS
 
+### Phase 36 — Compare two text files (2026-07-31)
+- [x] `compare_files` tool (`jarvis/tools/compare.py`): the file family could
+      LOCATE a file, REARRANGE it, back it up / restore it, remove it, measure a
+      folder (`folder_size`), find files stored twice (`find_duplicates`) and
+      report the exact facts about one file (`file_info`). `find_duplicates` can
+      say two files are byte-for-byte IDENTICAL, but nothing could say what is
+      DIFFERENT between two specific files -- and an 8B model can't eyeball two
+      documents and reliably report the changes. Now Jarvis can ("did this file
+      change", "what's different between my draft and the final", "compare
+      config.yaml and config.backup", "are these two notes the same") -- read-only,
+      the natural companion to `find_files` (locate two files, then diff them) and
+      `file_info` (facts about one file, differences between two)
+- [x] Reports whether the two text files are identical or different and, when they
+      differ, exactly how many lines were added and removed plus a short, bounded
+      preview of the changed lines (unified-diff style, `- from the first, + from
+      the second`). Pure standard library (`difflib`), NO new dependency
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): BOTH
+      paths -- including a `..`-escape, resolved and re-checked -- are REJECTED
+      unless inside the user's home, so Jarvis can never read a file under
+      `C:\Windows` or outside the user's own folders
+- [x] Text only: a binary file (by extension OR a NUL-byte sniff, reusing
+      `fileinfo._is_binary`) is refused rather than dumping a meaningless byte diff;
+      a folder source is refused too, and a same-path-twice call is a friendly note
+- [x] Bounded everywhere: each file is size-capped before it is read (5 MB), the
+      number of lines compared is capped (200k), and the changed-line preview is
+      capped in both count (40 lines) and per-line length (200 chars) -- a giant or
+      hostile file can't exhaust memory or flood the agent's context
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`first`/`second`/`old`/`new`/`a`/`b`/...),
+      a missing file surfaced as a friendly message, output forced to pure ASCII
+      (real UTF-8 curly quotes/accents transliterated) -- never raises, read-only
+- [x] Auto-registers via a new `compare` import in `app.py`; the agent system
+      prompt steers "what changed between these two files / compare X and Y" to
+      `compare_files` (file_info for facts about ONE file, compare_files for the
+      differences between TWO); the console "Try:" line suggests "compare my
+      draft.txt and final.txt"
+- [x] `tests/smoke.py compare` (in the safe set) covers a real diff (exact
+      added/removed counts + the changed lines in the preview), identical content,
+      UTF-8 -> ASCII output, the same-file-twice note, alt arg names, a refused
+      binary file, the containment guard (absolute AND `..`-escape, for both
+      files), a folder source + missing file, the size cap, ASCII-only output, and
+      the empty/missing/wrong-type guards. Full safe set: 259 checks, all PASS
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1061,6 +1104,11 @@
       size / created + modified dates / read-only flag / line + word count (text) /
       SHA-256 checksum; home-contained, bounded (checksum + text-read caps), folder
       source steered to folder_size, ASCII-only
+- [x] Productivity / text handling: compare two text files and report what changed
+      -- done in Phase 36 (`compare_files`); pure stdlib (`difflib`, no dep),
+      read-only, reports identical/different + added/removed line counts + a bounded
+      changed-line preview, home-contained (both paths), text-only (binary refused),
+      bounded (file size / lines / preview), ASCII-only
 - [ ] Structured data next: an Excel `.xlsx` reader (needs a dependency like
       openpyxl, which is NOT currently installed) so "how many rows in my
       workbook.xlsx" / "read sheet 2" works; read_csv already tells the user to

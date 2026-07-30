@@ -630,12 +630,44 @@ total in this json"). Pure stdlib, NO new dependency.
   ASCII + containment, and the empty-key/missing-file/wrong-type/alt-name/extra-
   arg guards). Full safe set: 249 checks, all PASS.
 
+## 2026-07-31 — Compare two text files (Phase 36)
+
+Added `compare_files` (`jarvis/tools/compare.py`): the file family could report a
+file's facts (`file_info`) and spot files stored twice (`find_duplicates`, which
+says two files are IDENTICAL), but nothing could say what is DIFFERENT between two
+specific files -- and an 8B model can't eyeball two documents and report the
+changes. Jarvis can now answer "did this file change", "what's different between
+my draft and the final", "compare config.yaml and config.backup", "are these two
+notes the same". Read-only; partners with find_files (locate two, then diff) and
+file_info (facts about one file vs differences between two).
+- Reports identical/different and, when different, exactly how many lines were
+  added and removed plus a short unified-diff-style preview of the changed lines
+  (`- from the first, + from the second`). Pure stdlib (`difflib`), NO new dep.
+- Reuses `organize._resolve_under_home` for containment (BOTH paths, incl. a
+  `..`-escape, REJECTED outside home) and `fileinfo._is_binary` (binary by
+  extension OR NUL-byte sniff refused -- no meaningless byte diff). A folder source
+  is refused; a same-path-twice call is a friendly note.
+- Bounded: each file size-capped before read (`MAX_FILE_BYTES`, 5 MB), lines
+  compared capped (`MAX_LINES`, 200k), preview capped in count (`MAX_PREVIEW_LINES`,
+  40) and per-line length (`MAX_LINE_LEN`, 200). Alt arg names (`first`/`second`/
+  `old`/`new`/`a`/`b`/...), wrong-type/empty/missing args coerced or rejected,
+  output pure ASCII (real UTF-8 curly quotes/accents transliterated). Never raises.
+- Wired into `app.py` imports (`from .tools import compare`) + the console "Try:"
+  line ("compare my draft.txt and final.txt"), and the agent system prompt
+  (compare_files for the differences between TWO files vs file_info for ONE).
+- `tests/smoke.py compare` (safe set): a real diff (exact added/removed counts +
+  changed lines in the preview), identical content, UTF-8 -> ASCII output, the
+  same-file-twice note, alt arg names, a refused binary file, containment
+  (absolute + `..`-escape, both files), folder + missing guards, the size cap,
+  ASCII-only, and the empty/missing/wrong-type guards. Full safe set: 259 checks,
+  all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 35 that is 60 without browser, 66 with. No tools are being silently
+after Phase 36 that is 61 without browser, 67 with. No tools are being silently
 dropped.
 
 ## How to test (in order)
