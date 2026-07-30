@@ -17,7 +17,7 @@ class Transcriber:
         self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
         self.language = language
 
-    def record_utterance(self) -> np.ndarray | None:
+    def record_utterance(self, on_level=None) -> np.ndarray | None:
         frame_len = int(SAMPLE_RATE * FRAME_MS / 1000)
         chunks, started, silent_s, total_s = [], False, 0.0, 0.0
         with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
@@ -28,6 +28,8 @@ class Transcriber:
                 chunks.append(mono)
                 total_s += FRAME_MS / 1000
                 rms = float(np.sqrt(np.mean(mono**2)))
+                if on_level is not None:
+                    on_level(min(1.0, rms / 0.12))
                 if rms > ENERGY_THRESHOLD:
                     started = True
                     silent_s = 0.0
@@ -45,8 +47,8 @@ class Transcriber:
         )
         return " ".join(s.text.strip() for s in segments).strip()
 
-    def listen(self) -> str:
-        audio = self.record_utterance()
+    def listen(self, on_level=None) -> str:
+        audio = self.record_utterance(on_level=on_level)
         if audio is None:
             return ""
         return self.transcribe(audio)

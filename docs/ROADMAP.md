@@ -24,6 +24,25 @@
 - [x] Headed Chromium controlled by the agent (Playwright):
       open, read, click, type, back, close
 
+### Phase 5 — Listening UX (2026-07-30)
+- [x] Floating "Jarvis orb" HUD (`jarvis/voice/hud.py`): borderless,
+      always-on-top window; orb color = state (idle/listening/thinking/
+      speaking), live mic-level bar, drag to move. Fails safe to a no-op.
+- [x] Wake sensitivity in `config.yaml` (`voice.wake_threshold`, default 0.4)
+- [x] Orb turns green the instant the wake word fires (feels immediate)
+- [x] `tests/smoke.py hud` — opens the orb, cycles states + fake mic level
+
+### Phase 6 — Long-term memory (2026-07-30)
+- [x] Persistent memory across restarts (`jarvis/tools/memory.py`): tools
+      `remember` / `recall` / `forget`, backed by `data/memory.json`
+- [x] Saved facts auto-injected into the agent's system prompt each turn, so
+      Jarvis acts on what it already knows (name, preferences, schedules)
+- [x] Hardened against 8B hallucinations: empty/oversized/wrong-type facts
+      rejected or bounded, dedup, per-store cap, atomic writes, corrupt-file
+      recovery — none can crash the agent or corrupt the store
+- [x] Startup line shows how many facts are remembered
+- [x] `tests/smoke.py memory` (in the safe set) covers the guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -36,14 +55,17 @@
   `jarvis/voice/stt.py` if it cuts you off or never stops listening.
 
 ## Future work
-- [ ] Human voice test + threshold tuning (first thing next session)
+- [ ] Human voice test + threshold tuning: watch the orb's mic bar move as
+      you speak; if "Hey Jarvis" is still missed, lower `voice.wake_threshold`
+      (e.g. 0.3); tune `ENERGY_THRESHOLD` in `stt.py` if it cuts you off
 - [ ] Better voice: Piper or Kokoro TTS (natural Jarvis-like voice)
 - [ ] Streaming responses + barge-in (interrupt Jarvis while he talks)
 - [ ] Arabic support: whisper handles Arabic (`stt_language: ar`), test TTS
       voices; make Jarvis bilingual
 - [ ] Face recognition ("it's you" vs "unknown person") — opt-in
 - [ ] Watch multiple cameras at once; small live dashboard window
-- [ ] Long-term memory for Jarvis (remember facts between runs)
+- [ ] Memory next steps: let Jarvis edit/replace a fact (not just add/forget),
+      and surface remembered facts in the HUD
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

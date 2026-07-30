@@ -38,6 +38,24 @@ NOT yet human-tested: actually saying "Hey Jarvis" into the mic (init +
 mic-level verified only). First thing next session: have the user try voice,
 tune `ENERGY_THRESHOLD` in `jarvis/voice/stt.py` if needed.
 
+## 2026-07-30 — Listening UX (Phase 5)
+
+the user reported wake word often missed + no feedback + feels laggy. Added a
+floating "Jarvis orb" HUD and wake tuning. See
+`docs/superpowers/specs/2026-07-30-jarvis-listening-hud-design.md`.
+
+- `jarvis/voice/hud.py` — `Hud` thread draws a borderless, always-on-top
+  Tkinter orb (color = state) + live mic-level bar; drag to move. `create(cfg)`
+  returns a `_NullHud` no-op if disabled or Tk can't open (voice still works).
+  Runs via `root.update()` in a 40 ms loop (no blocking mainloop), all Tk
+  calls on the hud thread only.
+- `wake.py` / `stt.py` gained an optional `on_level(0..1)` callback → mic bar.
+- `voice.wake_threshold` now in config (default 0.4, was hardcoded 0.5).
+- `loop.py` sets orb state per phase; `app.py` creates/reflects/shuts it down.
+- `tests/smoke.py hud` passes (window drew, ok=True). STILL not human-tested
+  with a real "Hey Jarvis" — that + threshold tuning is the next step.
+- Chosen (brainstorm): keep qwen3:8b brain; did NOT swap to a faster model.
+
 ## How to test (in order)
 
 ```

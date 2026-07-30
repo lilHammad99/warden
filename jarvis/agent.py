@@ -10,6 +10,7 @@ import threading
 import ollama
 
 from .config import DESKTOP, HOME
+from .tools import memory as memory_store
 from .tools import registry
 
 SYSTEM_PROMPT = f"""You are Jarvis, a local AI assistant running on the user's Windows PC,
@@ -27,6 +28,10 @@ Rules:
 - If a tool returns an error, tell the user briefly what went wrong.
 - Only answer from web_search results when asked about news/weather/current
   facts; otherwise answer from your own knowledge.
+- Long-term memory: when the user asks you to remember something, or shares a
+  lasting fact (a name, preference, schedule, or where something is), call
+  remember with one short fact. If they refer to something from before, call
+  recall. Anything under "Long-term memory" below is already known — use it.
 """
 
 MAX_TOOL_ROUNDS = 8
@@ -55,8 +60,18 @@ class Agent:
                 options={"num_ctx": 8192},
             )
 
+    def _refresh_memory(self) -> None:
+        """Rebuild the system message so freshly remembered facts are visible
+        immediately. Defensive: a memory failure must never break chat."""
+        try:
+            preamble = memory_store.memory_preamble()
+        except Exception:
+            preamble = ""
+        self.messages[0] = {"role": "system", "content": SYSTEM_PROMPT + preamble}
+
     def chat(self, user_text: str, status=lambda s: None) -> str:
         with self.lock:
+            self._refresh_memory()
             self.messages.append({"role": "user", "content": user_text})
             for _ in range(MAX_TOOL_ROUNDS):
                 response = self._call_model(self.messages)

@@ -19,6 +19,8 @@ def main():
     # importing tool modules registers their tools
     from .tools import apps, files, system, web  # noqa: F401
     from .tools import camera  # noqa: F401
+    from .tools import memory as memory_store  # noqa: F401
+    from .tools import registry
     try:
         from .tools import browser  # noqa: F401
         browser_ok = True
@@ -32,6 +34,9 @@ def main():
     speaker = Speaker()
     camera.init(cfg, speaker)
 
+    from .voice.hud import create as create_hud
+    hud = create_hud(cfg)
+
     agent = Agent(cfg["models"]["chat"])
 
     voice_status = "off"
@@ -39,14 +44,20 @@ def main():
         try:
             from .voice.loop import VoiceLoop
 
-            VoiceLoop(cfg, agent, speaker).start()
+            VoiceLoop(cfg, agent, speaker, hud).start()
             voice_status = "on — say 'Hey Jarvis'"
         except Exception as e:
             voice_status = f"unavailable ({e})"
 
+    resting = "idle" if cfg["voice"]["enabled"] else "off"
+    hud.state(resting)
+
+    n_mem = memory_store.count()
+    mem_status = f"{n_mem} fact{'s' if n_mem != 1 else ''} remembered" if n_mem else "empty"
     print(BANNER)
     print(f"model: {cfg['models']['chat']} | vision: {cfg['models']['vision']}"
           f" | voice: {voice_status} | browser tools: {'on' if browser_ok else 'off'}")
+    print(f"memory: {mem_status}  ({len(registry.specs())} tools online)")
     print("Type your command ('exit' to quit). Try: start working / what do you see\n")
 
     while True:
@@ -60,14 +71,18 @@ def main():
             print("jarvis> Goodbye, sir.")
             speaker.say("Goodbye, sir.")
             speaker.stop()
+            hud.shutdown()
             camera.shutdown()
             if browser_ok:
                 from .tools import browser as b
                 b.shutdown()
             sys.exit(0)
+        hud.state("thinking")
         reply = agent.chat(text, status=lambda s: print(f"  {s}", flush=True))
         print(f"jarvis> {reply}\n")
+        hud.state("speaking")
         speaker.say(reply)
+        hud.state(resting)
 
 
 if __name__ == "__main__":

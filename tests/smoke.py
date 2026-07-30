@@ -22,7 +22,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, camera, files, registry, system, web  # noqa
+        from jarvis.tools import apps, browser, camera, files, memory, registry, system, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -39,6 +39,63 @@ def t_tools():
     tmp = os.path.join(tempfile.gettempdir(), "jarvis_smoke.txt")
     check("write_file", lambda: registry.dispatch("write_file", {"path": tmp, "content": "hello"}))
     check("read_file", lambda: registry.dispatch("read_file", {"path": tmp}))
+
+
+def t_memory():
+    """Exercises long-term memory + its defenses against 8B hallucinations.
+    No model needed, so it lives in the safe set."""
+    from jarvis.tools import memory as mem
+    from jarvis.tools import registry
+
+    # isolate: use a temp store so we never touch the user's real memory
+    import tempfile, os, pathlib
+    mem._STORE = pathlib.Path(tempfile.gettempdir()) / "jarvis_mem_smoke.json"
+    for p in (mem._STORE, mem._STORE.with_name("memory.corrupt.json")):
+        if p.exists():
+            os.remove(p)
+
+    def happy_path():
+        assert "Remembered" in registry.dispatch("remember", {"fact": "The user's name is the user"})
+        assert "the user" in registry.dispatch("recall", {"query": "name"})
+        assert mem.count() == 1
+        # remember/recall show up in the injected preamble
+        assert "the user" in mem.memory_preamble()
+        return "remember/recall/preamble ok"
+    check("memory happy path", happy_path)
+
+    def dedup():
+        registry.dispatch("remember", {"fact": "The user's name is the user"})
+        return f"count still {mem.count()} (deduped)" if mem.count() == 1 \
+            else (_ for _ in ()).throw(AssertionError("duplicate stored"))
+    check("memory dedup", dedup)
+
+    def hallucination_guards():
+        # empty / whitespace / wrong-type args must NOT crash or store junk
+        assert "Error" in registry.dispatch("remember", {"fact": "   "})
+        assert "Error" in registry.dispatch("remember", {"fact": ""})
+        assert registry.dispatch("remember", {}).startswith(("Error", "Remembered", "Already"))
+        assert "Error" in registry.dispatch("forget", {"query": ""})
+        # over-long "fact" (essay dump) is truncated, not rejected or unbounded
+        long = registry.dispatch("remember", {"fact": "x" * 5000})
+        assert "shortened" in long
+        return f"guards held, count={mem.count()}"
+    check("memory hallucination guards", hallucination_guards)
+
+    def forget_flow():
+        before = mem.count()
+        assert "Forgotten" in registry.dispatch("forget", {"query": "the user"})
+        assert mem.count() == before - 1
+        assert "Nothing in memory matches" in registry.dispatch("forget", {"query": "zzzz"})
+        return "forget ok"
+    check("memory forget", forget_flow)
+
+    def corrupt_store_recovers():
+        mem._STORE.write_text("{ this is not valid json ", encoding="utf-8")
+        # _load must not raise; corrupt file set aside, store treated as empty
+        assert mem.count() == 0
+        assert mem._STORE.with_name("memory.corrupt.json").exists()
+        return "corrupt store recovered"
+    check("memory corrupt-store recovery", corrupt_store_recovers)
 
 
 def t_agent():
@@ -84,6 +141,25 @@ def t_tts():
     check("tts speak", speak)
 
 
+def t_hud():
+    import time
+    from jarvis import config as c
+    from jarvis.voice.hud import create
+    cfg = c.load()
+    def demo():
+        h = create(cfg)
+        for st in ("idle", "listening", "thinking", "speaking"):
+            h.state(st)
+            for i in range(12):
+                h.level((i % 10) / 10.0)
+                time.sleep(0.05)
+        ok = getattr(h, "ok", False)
+        h.shutdown()
+        time.sleep(0.3)
+        return f"hud drew window ok={ok}"
+    check("hud orb cycle", demo)
+
+
 def t_watch():
     from jarvis import config as c
     from jarvis.vision.cameras import CameraManager
@@ -120,9 +196,9 @@ def t_e2e():
     camera.shutdown()
 
 
-SECTIONS = {"imports": t_imports, "tools": t_tools, "agent": t_agent,
-            "camera": t_camera, "vision": t_vision, "tts": t_tts,
-            "watch": t_watch, "e2e": t_e2e}
+SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
+            "agent": t_agent, "camera": t_camera, "vision": t_vision,
+            "tts": t_tts, "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "safe"
@@ -130,7 +206,7 @@ if __name__ == "__main__":
         for fn in SECTIONS.values():
             fn()
     elif which == "safe":
-        t_imports(); t_tools()
+        t_imports(); t_tools(); t_memory()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

@@ -18,8 +18,13 @@ watch:
 voice:
   enabled: true
   wake_word: hey_jarvis_v0.1
+  wake_threshold: 0.4   # 0.0-1.0; lower = more sensitive (easier to trigger)
   stt_model: small
   stt_language: en
+
+hud:
+  enabled: true          # the floating "Jarvis orb" that shows it's listening
+  corner: bottom-right   # bottom-right | bottom-left | top-right | top-left
 
 apps:
   # extra app aliases -> command to launch (merged with built-ins)

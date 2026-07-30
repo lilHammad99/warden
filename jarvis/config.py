@@ -19,9 +19,11 @@ DEFAULTS = {
     "voice": {
         "enabled": True,
         "wake_word": "hey_jarvis_v0.1",
+        "wake_threshold": 0.4,
         "stt_model": "small",
         "stt_language": "en",
     },
+    "hud": {"enabled": True, "corner": "bottom-right"},
     "apps": {},
 }
 

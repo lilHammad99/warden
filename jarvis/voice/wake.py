@@ -16,14 +16,22 @@ class WakeListener:
         )
         self.threshold = threshold
 
-    def wait_for_wake(self, should_stop=lambda: False) -> bool:
-        """Block until the wake word is heard. Returns False if stopped."""
+    def wait_for_wake(self, should_stop=lambda: False, on_level=None) -> bool:
+        """Block until the wake word is heard. Returns False if stopped.
+
+        on_level(0..1), if given, is called each chunk with the current mic
+        loudness so a UI can show that the mic is picking up sound.
+        """
         self.model.reset()
         with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                             blocksize=CHUNK) as stream:
             while not should_stop():
                 data, _ = stream.read(CHUNK)
-                scores = self.model.predict(np.frombuffer(data.tobytes(), dtype=np.int16))
+                samples = np.frombuffer(data.tobytes(), dtype=np.int16)
+                if on_level is not None:
+                    rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+                    on_level(min(1.0, rms / 4000.0))
+                scores = self.model.predict(samples)
                 if any(v >= self.threshold for v in scores.values()):
                     return True
         return False
