@@ -44,6 +44,7 @@ def main():
     from .tools import memory as memory_store  # noqa: F401
     from .tools import organize  # noqa: F401
     from .tools import recent  # noqa: F401
+    from .tools import recycle  # noqa: F401
     from .tools import reminders as reminder_store  # noqa: F401
     from .tools import search  # noqa: F401
     from .tools import shell  # noqa: F401
@@ -127,6 +128,7 @@ def main():
           "find my resume / which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "
           "back up my documents into a zip / unzip my backup / "
+          "delete that old draft to the recycle bin / "
           "actually my wifi password changed to hunter2\n")
 
     while True:

@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-archive, extract, clipboard, tasks, calc, dates, convert, reminders, dispatch, agent,
-camera, vision, tts, hud, watch, e2e, all (default: safe set)
+archive, extract, recycle, clipboard, tasks, calc, dates, convert, reminders,
+dispatch, agent, camera, vision, tts, hud, watch, e2e, all (default: safe set)
 """
 
 import sys
@@ -24,7 +24,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, extract, files, find, memory, organize, recent, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -921,6 +921,134 @@ def t_extract():
                 pass
 
 
+def t_recycle():
+    """Exercises the recycle_file tool (safe, undoable delete) + its defenses
+    against 8B hallucinations. The real Recycle Bin call is swapped for a
+    hermetic fake that moves the file into a sandbox 'trash' folder, so the test
+    is deterministic, needs no model, never touches the user's real bin, and
+    lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import recycle as rec  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_recycle_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    (sandbox / "sub").mkdir(parents=True, exist_ok=True)
+    trash = sandbox / "_fake_trash"
+    trash.mkdir(exist_ok=True)
+
+    def mk(rel, text="x"):
+        p = sandbox / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    # hermetic fake: "recycle" == move into the sandbox trash (undoable, and it
+    # never touches the user's real Recycle Bin)
+    def fake_recycle(path):
+        src = pathlib.Path(path)
+        shutil.move(str(src), str(trash / src.name))
+
+    saved_recycler = rec._send_to_recycle_bin
+    saved_cap = rec.MAX_RECYCLE_BYTES
+    rec._send_to_recycle_bin = fake_recycle
+    try:
+        def happy_path():
+            mk("draft.txt", "old draft")
+            out = registry.dispatch("recycle_file",
+                {"path": "jarvis_recycle_smoke/draft.txt"})
+            assert "Recycle Bin" in out and "restore" in out, out
+            # the file left its place (removed from source)...
+            assert not (sandbox / "draft.txt").exists(), "file not removed"
+            # ...and is recoverable (our fake bin has it) -> nothing destroyed
+            assert (trash / "draft.txt").exists(), "file not recoverable"
+            return "sent a file to the (fake) bin, recoverable"
+        check("recycle happy path", happy_path)
+
+        def alt_arg_names():
+            # the model may pass file=/source= instead of path
+            mk("alt.txt")
+            out = registry.dispatch("recycle_file",
+                {"file": "jarvis_recycle_smoke/alt.txt"})
+            assert "Recycle Bin" in out, out
+            assert not (sandbox / "alt.txt").exists()
+            return "alt file/source arg names handled"
+        check("recycle alt arg names", alt_arg_names)
+
+        def containment_guard():
+            # a file OUTSIDE the user's home must be refused, never binned
+            r = registry.dispatch("recycle_file", {"path": "C:\\Windows\\notepad.exe"})
+            assert "only work inside your own folders" in r, r
+            return "escape outside home blocked"
+        check("recycle containment guard", containment_guard)
+
+        def refuses_directory():
+            r = registry.dispatch("recycle_file", {"path": "jarvis_recycle_smoke/sub"})
+            assert "folder" in r and "whole folders" in r, r
+            assert (sandbox / "sub").exists(), "folder was binned!"
+            return "a folder is refused"
+        check("recycle refuses directory", refuses_directory)
+
+        def missing_source_is_friendly():
+            r = registry.dispatch("recycle_file",
+                {"path": "jarvis_recycle_smoke/ghost.txt"})
+            assert "can't find" in r, r
+            return "missing source is a friendly message"
+        check("recycle missing source", missing_source_is_friendly)
+
+        def size_cap():
+            rec.MAX_RECYCLE_BYTES = 4              # temporarily tiny
+            mk("big.txt", "0123456789")            # 10 bytes > 4
+            r = registry.dispatch("recycle_file",
+                {"path": "jarvis_recycle_smoke/big.txt"})
+            assert "too large" in r, r
+            # refused: the file is left exactly where it was, never touched
+            assert (sandbox / "big.txt").exists(), "oversized file was binned"
+            rec.MAX_RECYCLE_BYTES = saved_cap
+            return "oversized delete refused, file kept"
+        check("recycle size cap", size_cap)
+
+        def recycler_failure_is_friendly():
+            # if the OS delete itself fails, it's a friendly message, not a crash
+            def boom(path):
+                raise OSError("bin unavailable")
+            rec._send_to_recycle_bin = boom
+            mk("stay.txt")
+            r = registry.dispatch("recycle_file",
+                {"path": "jarvis_recycle_smoke/stay.txt"})
+            assert "couldn't delete it" in r, r
+            assert (sandbox / "stay.txt").exists(), "file vanished despite failure"
+            rec._send_to_recycle_bin = fake_recycle
+            return "OS failure surfaced, file kept"
+        check("recycle os-failure guard", recycler_failure_is_friendly)
+
+        def output_is_ascii():
+            mk("asc.txt")
+            registry.dispatch("recycle_file",
+                {"path": "jarvis_recycle_smoke/asc.txt"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("recycle ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # empty / missing args -> friendly error, never a crash, never a bin
+            assert "Error" in registry.dispatch("recycle_file", {"path": ""})
+            assert "Error" in registry.dispatch("recycle_file", {"path": "   "})
+            assert "Error" in registry.dispatch("recycle_file", {})
+            # wrong types must not raise
+            registry.dispatch("recycle_file", {"path": 123})
+            registry.dispatch("recycle_file", {"path": ["a"]})
+            registry.dispatch("recycle_file", {"path": {}})
+            return "guards held"
+        check("recycle hallucination guards", hallucination_guards)
+    finally:
+        rec._send_to_recycle_bin = saved_recycler
+        rec.MAX_RECYCLE_BYTES = saved_cap
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def t_clipboard():
     """Exercises the clipboard tools + their defenses against 8B
     hallucinations. No model needed, so it lives in the safe set. The user's
@@ -1531,7 +1659,7 @@ def t_e2e():
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize, "archive": t_archive,
-            "extract": t_extract, "clipboard": t_clipboard,
+            "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
@@ -1545,7 +1673,8 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_archive(); t_extract(); t_clipboard()
+        t_recent(); t_organize(); t_archive(); t_extract(); t_recycle()
+        t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

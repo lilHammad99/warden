@@ -425,6 +425,40 @@
       AND dest), a corrupt/non-zip archive, alt arg names, ASCII-only output, and
       the empty/missing/wrong-type/folder-source guards
 
+### Phase 22 — Delete to Recycle Bin (2026-07-30)
+- [x] `recycle_file` tool (`jarvis/tools/recycle.py`): the safe 'delete' member
+      of the file tools, completing the family. The navigation tools LOCATE a
+      file (`find_files`/`search_files`/`recent_files`), organise REARRANGES it
+      (`move_file`/`copy_file`), and archive backs it up / restores it
+      (`zip_files`/`unzip_files`); the one everyday action still missing was
+      removing a file the user is done with ("delete that draft", "remove the old
+      screenshot", "bin my notes"). Now Jarvis can -- WITHOUT destroying anything
+- [x] **Never a permanent delete.** The file is sent to the Windows Recycle Bin
+      (`FOF_ALLOWUNDO` via the Win32 shell API, ctypes, no new dependency), so
+      anything Jarvis removes the user can restore. There is deliberately no
+      hard-delete path anywhere in the module
+- [x] Rooted in the user's home only (shares `find_files`' containment via
+      `organize._resolve_under_home`): a file outside home is REJECTED, so Jarvis
+      can never bin something in `C:\Windows` or outside the user's own folders
+- [x] Files only (a folder is refused, so a whole tree can't be binned by one
+      hallucinated path); bounded by a size cap -- a file too large for the
+      Recycle Bin (which Windows would delete for good) is REFUSED rather than
+      risking a permanent, un-undoable delete
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`file`/`source`/`path`/...), success only
+      claimed after confirming the file actually left its place, an OS-level
+      delete failure surfaced as a friendly message, all output pure ASCII --
+      never raises, never crashes the agent
+- [x] Agent system prompt now steers "delete / remove / bin that file" to
+      `recycle_file` (and makes clear it is undoable and single-file only); the
+      console "Try:" line suggests "delete that old draft to the recycle bin"
+- [x] `tests/smoke.py recycle` (in the safe set) covers the happy path
+      (file removed + recoverable), alt arg names, the containment guard, a
+      folder refusal, the missing-source message, the size cap, an OS-failure
+      guard, ASCII-only output, and the empty/missing/wrong-type guards. The real
+      Recycle Bin call is swapped for a hermetic fake, so the test is
+      deterministic and never touches the user's real bin
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -457,8 +491,11 @@
 - [x] File management: an `unzip`/extract counterpart to zip_files -- done in
       Phase 21 (`unzip_files`); extracts into a home folder, zip-slip proof,
       never overwrites
-- [ ] File management next: opt-in delete-to-Recycle-Bin (needs a safe
-      confirm/undo path, e.g. send2trash); moving whole folders with move_file
+- [x] File management: opt-in delete-to-Recycle-Bin -- done in Phase 22
+      (`recycle_file`); undoable (Windows Recycle Bin), files-only, size-capped,
+      home-contained, no permanent-delete path
+- [ ] File management next: moving whole folders with move_file; recycling whole
+      folders with recycle_file (needs the same care as files-only today)
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

@@ -210,14 +210,41 @@ file-management loop (locate -> rearrange -> back up -> restore).
   empty/missing/wrong-type/folder-source guards). Safe set: 103 checks, all PASS
   (46 tools registered without the optional browser module).
 
+## 2026-07-30 — Delete to Recycle Bin (Phase 22)
+
+Added `recycle_file` (`jarvis/tools/recycle.py`): the safe 'delete' member of the
+file tools, completing the family (locate -> rearrange -> back up -> restore ->
+remove). Jarvis can now act on "delete that draft", "remove the old screenshot",
+"bin my notes" -- without ever destroying anything permanently.
+- Sends the file to the Windows Recycle Bin (`FOF_ALLOWUNDO` via the Win32 shell
+  API `SHFileOperationW`, ctypes -- no new dependency, mirrors the clipboard
+  tool), so every delete is undoable. There is deliberately NO hard-delete path.
+- Reuses `organize._resolve_under_home` for containment: a file outside the
+  user's home is REFUSED, so it can never bin anything in `C:\Windows`. Files
+  only (a folder is refused). Size-capped (`MAX_RECYCLE_BYTES`, 1 GB): a file too
+  big for the Recycle Bin -- which Windows would delete for good -- is refused,
+  never risking a permanent delete. Success is only claimed after confirming the
+  file actually left its place; an OS-level failure comes back as a friendly
+  message. Alt arg names (`file`/`source`/`path`/...), wrong-type/empty/missing
+  args coerced or rejected, output pure ASCII. Never raises.
+- Wired into `app.py` imports + the console "Try:" line ("delete that old draft
+  to the recycle bin"), and the agent system prompt (recycle_file after the
+  unzip_files bullet, stressing undoable + single-file only).
+- `tests/smoke.py recycle` added to the safe set: the real Recycle Bin call is
+  swapped for a hermetic fake (moves the file into a sandbox trash folder), so
+  the test is deterministic and never touches the user's real bin. Covers happy
+  path (removed + recoverable), alt arg names, containment, folder refusal,
+  missing source, size cap, OS-failure guard, ASCII-only, and the
+  empty/missing/wrong-type guards. Full safe set: 106 checks, all PASS
+  (53 tools registered with the optional browser module).
+
 ## 2026-07-30 — Tool-count note
 
-Tool-count note (the 48/44 fluctuation): NOT a registry bug. The registry holds
-exactly one entry per `@tool`-decorated function -- verified: 51 registered ==
-51 decorators defined (was 50 before this phase). The printed number only swings
-on whether the OPTIONAL `browser` module imports at count time (it adds 6:
-45 without it, 51 with). The earlier "48" was a stale figure from before recent
-tools existed. No tools are being silently dropped.
+Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
+exactly one entry per `@tool`-decorated function. The printed number only swings
+on whether the OPTIONAL `browser` module imports at count time (it adds 6):
+after Phase 22 that is 47 without browser, 53 with (52 + `recycle_file`). No
+tools are being silently dropped.
 
 ## How to test (in order)
 
