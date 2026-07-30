@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
-Sections: imports, tools, memory, shell, find, clipboard, tasks, calc, agent,
-camera, vision, tts, hud, watch, e2e, all (default: safe set)
+Sections: imports, tools, memory, shell, find, clipboard, tasks, calc, dates,
+agent, camera, vision, tts, hud, watch, e2e, all (default: safe set)
 """
 
 import sys
@@ -23,7 +23,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, calc, camera, clipboard, files, find, memory, registry, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, browser, calc, camera, clipboard, dates, files, find, memory, registry, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -394,6 +394,74 @@ def t_calc():
     check("calc bounds and guards", bounds_and_guards)
 
 
+def t_dates():
+    """Exercises the date/time calculator + its defenses against 8B
+    hallucinations. No model needed, so it lives in the safe set."""
+    from datetime import date, datetime, timedelta
+    from jarvis.tools import dates  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    def happy_path():
+        # a fixed, unambiguous date: 2026-12-25 is a Friday
+        out = registry.dispatch("weekday", {"date": "2026-12-25"})
+        assert "Friday" in out, out
+        # month-name form parses too
+        assert "Friday" in registry.dispatch("weekday", {"date": "December 25 2026"})
+        # today reports the real current day
+        td = registry.dispatch("today", {})
+        assert date.today().strftime("%B") in td, td
+        return "weekday + today ok"
+    check("dates happy path", happy_path)
+
+    def days_math():
+        # days_between is order-independent and exact
+        out = registry.dispatch("days_between",
+                                {"start": "2026-01-01", "end": "2026-01-31"})
+        assert "30 days" in out, out
+        # days_until agrees with a locally computed delta
+        target = date.today() + timedelta(days=10)
+        u = registry.dispatch("days_until", {"date": target.isoformat()})
+        assert "10 days until" in u, u
+        # a past date reads as "ago"
+        past = (date.today() - timedelta(days=5)).isoformat()
+        assert "ago" in registry.dispatch("days_until", {"date": past})
+        return "days_between/days_until exact"
+    check("dates arithmetic", days_math)
+
+    def date_add_flow():
+        # 90 days from a fixed base
+        out = registry.dispatch("date_add", {"days": 90, "base": "2026-01-01"})
+        assert "1 April 2026" in out, out
+        # weeks shortcut and negative offsets
+        assert "8 January 2026" in registry.dispatch(
+            "date_add", {"weeks": 1, "base": "2026-01-01"})
+        assert "before" in registry.dispatch(
+            "date_add", {"days": -3, "base": "2026-01-10"})
+        # no base -> today, zero offset -> today unchanged
+        assert date.today().strftime("%B") in registry.dispatch("date_add", {"days": 0})
+        return "date_add ok"
+    check("dates date_add", date_add_flow)
+
+    def hallucination_guards():
+        # unparseable / empty / missing / wrong-type dates must not crash
+        assert "Error" in registry.dispatch("weekday", {"date": "not a date"})
+        assert "Error" in registry.dispatch("weekday", {"date": ""})
+        assert "Error" in registry.dispatch("weekday", {})
+        assert "Error" in registry.dispatch("days_until", {"date": "someday"})
+        # ambiguous slash date is refused, not guessed
+        assert "Error" in registry.dispatch("weekday", {"date": "12/25/2026"})
+        # over-long input rejected
+        assert "Error" in registry.dispatch("weekday", {"date": "2026-12-25 " + "x" * 60})
+        # runaway offset is capped, not overflowed
+        assert "too large" in registry.dispatch("date_add", {"days": 10 ** 12})
+        # wrong-type args coerced, never raise
+        registry.dispatch("weekday", {"date": 20261225})
+        registry.dispatch("date_add", {"days": "5", "base": "2026-01-01"})
+        registry.dispatch("date_add", {"days": True})
+        return "guards held"
+    check("dates hallucination guards", hallucination_guards)
+
+
 def t_agent():
     from jarvis import config as c
     from jarvis.agent import Agent
@@ -494,7 +562,7 @@ def t_e2e():
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "clipboard": t_clipboard,
-            "tasks": t_tasks, "calc": t_calc, "agent": t_agent,
+            "tasks": t_tasks, "calc": t_calc, "dates": t_dates, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
 
@@ -505,7 +573,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_clipboard()
-        t_tasks(); t_calc()
+        t_tasks(); t_calc(); t_dates()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

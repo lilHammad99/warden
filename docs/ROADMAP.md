@@ -127,6 +127,29 @@
 - [x] `tests/smoke.py calc` (in the safe set) covers arithmetic, functions,
       constants, code-injection refusal, and the size/overflow guards
 
+### Phase 12 — Date & time calculator (2026-07-30)
+- [x] `today` / `weekday` / `days_until` / `days_between` / `date_add` tools
+      (`jarvis/tools/dates.py`): the 8B model miscounts calendars, so this lets
+      it answer deadlines, birthdays, "what day is X", and "N days from now"
+      exactly ("how many days until christmas", "what day of the week is
+      2026-12-25", "what's the date 90 days from now") — an accuracy/autonomy win
+- [x] Pure stdlib `datetime`, NO new dependency; complements `calculate`
+- [x] Unambiguous parsing only: ISO `YYYY-MM-DD`, month-name forms
+      ("December 25 2026"), and today/tomorrow/yesterday. Ambiguous `m/d` vs
+      `d/m` slash dates are REFUSED, not guessed
+- [x] Hardened vs 8B hallucinations: input length + numeric offsets capped
+      (so `date_add(days=1e12)` can't overflow/hang), wrong-type args coerced,
+      unparseable/empty/missing dates return a friendly ASCII message — never
+      crashes the agent
+- [x] Agent system prompt now tells the model to use these tools for anything
+      calendar-related instead of guessing
+- [x] Startup now shows the current time + full date line, and adds a "how many
+      days until christmas" example to the "Try:" line (pure ASCII)
+- [x] `tests/smoke.py dates` (in the safe set) covers weekday/today, exact
+      day math, date_add (days/weeks/negative/no-base), and the hallucination
+      guards (unparseable, ambiguous slash date, over-long, offset overflow,
+      wrong types)
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.

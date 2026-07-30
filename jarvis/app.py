@@ -6,12 +6,16 @@ from .agent import Agent
 
 
 def _greeting() -> str:
-    """A short, time-of-day greeting for the console (pure ASCII)."""
-    h = datetime.datetime.now().hour
+    """A short, time-of-day greeting with today's date (pure ASCII)."""
+    now = datetime.datetime.now()
+    h = now.hour
     part = ("morning" if 5 <= h < 12 else
             "afternoon" if 12 <= h < 18 else
             "evening" if 18 <= h < 22 else "night")
-    return f"Good {part}, sir. Jarvis is online and ready."
+    stamp = now.strftime("%A, %d %B %Y").replace(" 0", " ")
+    clock = now.strftime("%I:%M %p").lstrip("0")
+    return (f"Good {part}, sir. Jarvis is online and ready.\n"
+            f"It is {clock} on {stamp}.")
 
 BANNER = r"""
       _   _    ______     _____ ____
@@ -31,6 +35,7 @@ def main():
     from .tools import calc  # noqa: F401
     from .tools import camera  # noqa: F401
     from .tools import clipboard  # noqa: F401
+    from .tools import dates  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
     from .tools import shell  # noqa: F401
@@ -84,7 +89,8 @@ def main():
         print(f"Reminder: you have {n_todo} thing{'s' if n_todo != 1 else ''} "
               "on your to-do list. Say 'what's on my list' to hear it.")
     print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
-          "add milk to my to-do list / find my resume / what do you see\n")
+          "how many days until christmas / add milk to my to-do list / "
+          "find my resume\n")
 
     while True:
         try:
