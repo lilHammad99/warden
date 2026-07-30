@@ -940,6 +940,45 @@
       folder_size, a missing file, ASCII-only output, and the empty/missing/
       wrong-type guards. Full safe set: 243 checks, all PASS
 
+### Phase 35 — Get one value out of a JSON file (2026-07-31)
+- [x] `get_json_value` tool (`jarvis/tools/jsondata.py`, alongside `read_json`):
+      the next data step flagged in Future work ("query a nested value by key
+      path, e.g. 'get models.chat'"). `read_json` SUMMARISES a whole JSON file;
+      this pulls out ONE value by its key path so the model doesn't have to
+      eyeball a preview and guess ("what's the chat model in my config", "get
+      models.chat from settings.json", "what is the first user's email", "what's
+      the total in this json"). Pure standard library -- NO new dependency
+- [x] Give `path` (the file; find it with find_files first if unknown) and `key`,
+      a dotted key path where dots descend into objects and numbers pick a list
+      position, so both `users.0.email` and `items[2].price` work; a quoted
+      bracket key (`data["a b"]`) and a JSONPath-ish `$.` prefix are tolerated
+- [x] No duplicated parsing: `read_json`'s file resolve/validate/parse was
+      extracted into a shared `_load_value(raw)` that BOTH tools call (same
+      home-containment, size/NUL/binary/JSONL handling and messages -- read_json's
+      existing checks all still pass)
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home` via
+      `_load_value`): a path outside home -- including a `..`-escape -- is
+      REJECTED, so it can never read a file from `C:\Windows`
+- [x] Bounded: the key path is length-capped (`MAX_KEYPATH_LEN`, 200) and
+      step-count-capped (`MAX_TOKENS`, 40); the returned value's rendering reuses
+      read_json's bounded, ASCII-forced preview/field-list/scalar helpers, so a
+      huge value can't flood the agent's context
+- [x] Helpful when it can't resolve the path: a missing key lists the AVAILABLE
+      fields so the 8B model can self-correct; an out-of-range list index, trying
+      to descend past a scalar, an empty/missing key, wrong-type args and alt arg
+      names (`file`/`field`/`keypath`/...) all return friendly, pure-ASCII
+      messages. Read-only; never raises
+- [x] Auto-registers via the already-present `jsondata` import in `app.py`; the
+      agent system prompt steers "get ONE value out of a JSON file" to
+      get_json_value (vs read_json to summarise); the console "Try:" line suggests
+      "get models.chat from my config.json"
+- [x] `tests/smoke.py jsondata` gains 6 get_json_value checks: a dotted scalar
+      (incl. bool + number), a list position via both dot and `[n]` syntax, a
+      value that is an object/list described + previewed, the missing-key (lists
+      available) / out-of-range / can't-descend-past-scalar guards, ASCII output +
+      the containment guard, and the empty-key / missing-file / wrong-type /
+      alt-name / extra-arg guards. Full safe set: 249 checks, all PASS
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1025,9 +1064,12 @@
 - [ ] Structured data next: an Excel `.xlsx` reader (needs a dependency like
       openpyxl, which is NOT currently installed) so "how many rows in my
       workbook.xlsx" / "read sheet 2" works; read_csv already tells the user to
-      save as CSV. Same home-contained + bounded + ASCII care as read_csv. A
-      deeper JSON win (query a nested value by key path, e.g. 'get models.chat')
-      could follow read_json too
+      save as CSV. Same home-contained + bounded + ASCII care as read_csv
+- [x] Structured data: query a nested value inside a JSON file by key path
+      (e.g. 'get models.chat') -- done in Phase 35 (`get_json_value`); pure stdlib
+      (no dep), reuses read_json's shared loader, dotted/bracket key paths,
+      home-contained, key-path length/step bounded, lists available fields on a
+      miss, ASCII-only
 - [ ] Document reading next: a PDF reader (needs a dependency like pypdf, which is
       NOT currently installed) so "read my resume.pdf"/"summarise this PDF" works;
       read_document already tells the user PDFs aren't supported yet. Same

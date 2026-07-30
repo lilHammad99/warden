@@ -136,6 +136,7 @@ def main():
           "how many words is my essay.txt / "
           "how many rows are in my data.csv / "
           "what's in my export.json / "
+          "get models.chat from my config.json / "
           "find my resume / read my resume.docx / "
           "which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "

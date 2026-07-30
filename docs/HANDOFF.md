@@ -598,12 +598,44 @@ exactly", "when did I create/last change this", "is this file read-only",
   folder_size, missing file, ASCII-only, and the empty/missing/wrong-type guards.
   Full safe set: 243 checks, all PASS.
 
+## 2026-07-31 — Get one value out of a JSON file (Phase 35)
+
+Added `get_json_value` (`jarvis/tools/jsondata.py`, alongside `read_json`): the
+next data step flagged in Future work ("query a nested value by key path, e.g.
+'get models.chat'"). `read_json` SUMMARISES a whole JSON file; this pulls out
+ONE value by its key path ("what's the chat model in my config", "get
+models.chat from settings.json", "what is the first user's email", "what's the
+total in this json"). Pure stdlib, NO new dependency.
+- Args `path` (the file) + `key` (a dotted key path). Dots descend into objects,
+  numbers pick a list position, so both `users.0.email` and `users[2].price`
+  work; a quoted bracket key (`data["a b"]`) and a JSONPath-ish `$.` prefix are
+  tolerated. Refactor: read_json's file resolve/validate/parse was extracted into
+  a shared `_load_value(raw)` that BOTH tools use (same containment, size/NUL/
+  binary/JSONL handling and messages -- read_json's 15 existing checks still
+  pass), so there's no duplicated parsing.
+- Hardened like the rest: reuses `organize._resolve_under_home` (a path outside
+  home, incl. a `..`-escape, is REJECTED -> can't read `C:\Windows`); key path
+  length- and step-count-bounded (`MAX_KEYPATH_LEN` 200 / `MAX_TOKENS` 40);
+  result rendering reuses read_json's bounded, ASCII-forced `_preview`/`_fields_
+  line`/`_scalar`. A missing key lists the AVAILABLE fields so the 8B model can
+  self-correct; out-of-range list index, "can't go deeper than a scalar", empty/
+  missing key, wrong-type args, alt arg names (`file`/`field`/`keypath`/...) all
+  return friendly ASCII. Read-only; never raises.
+- Auto-registers via the already-present `jsondata` import in `app.py`; wired into
+  the agent system prompt (get_json_value for ONE value vs read_json to summarise)
+  and the console "Try:" line ("get models.chat from my config.json").
+- `tests/smoke.py jsondata` gains 6 get_json_value checks (dotted scalar incl.
+  bool/number, list index via dot AND `[n]`, a value that is an object/list
+  described + previewed, missing-key/out-of-range/too-deep-past-scalar guards,
+  ASCII + containment, and the empty-key/missing-file/wrong-type/alt-name/extra-
+  arg guards). Full safe set: 249 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 34 that is 59 without browser, 65 with. No tools are being silently
+after Phase 35 that is 60 without browser, 66 with. No tools are being silently
 dropped.
 
 ## How to test (in order)

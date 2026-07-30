@@ -64,7 +64,11 @@ Rules:
   fields does this data have") -- call read_json with path; it parses the file
   and reports its structure exactly, where read_file only dumps raw text and your
   own reading of nested JSON is unreliable. Find the file with find_files first if
-  you don't have its path.
+  you don't have its path. When the user wants ONE specific value out of a JSON
+  file rather than a whole-file summary ("what's the chat model in my config",
+  "get models.chat from settings.json", "what is the first user's email"), call
+  get_json_value with path and key, where key is a dotted path (dots go into
+  objects, numbers pick a list position), e.g. 'models.chat' or 'users.0.email'.
 - Unit conversions: for ANY "convert X to Y" (miles to km, C to F, kg to lb,
   cups to ml, mph to km/h, GB to MB, etc.), call convert_units with value,
   from_unit and to_unit instead of guessing; it is always exact.

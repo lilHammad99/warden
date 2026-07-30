@@ -3288,6 +3288,102 @@ def t_jsondata():
             assert "object with 4 fields" in out, out
             return "guards held"
         check("read_json hallucination guards", hallucination_guards)
+
+        # --- get_json_value: pull ONE value out by its key path ---------------
+        def gjv_scalar():
+            out = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/config.json", "key": "models.chat"})
+            assert "qwen3:8b (text)" in out, out
+            assert "models.chat" in out, out
+            b = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/config.json", "key": "enabled"})
+            assert "true (true/false)" in b, b
+            v = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/config.json", "key": "version"})
+            assert "2 (number)" in v, v
+            return "dotted path into an object returns the exact scalar"
+        check("get_json_value dotted scalar", gjv_scalar)
+
+        def gjv_list_index():
+            # numbers pick a list position, both dot AND [n] bracket syntax
+            out = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/people.json", "key": "1.name"})
+            assert "Bob (text)" in out, out
+            out2 = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/people.json", "key": "[0].id"})
+            assert "1 (number)" in out2, out2
+            num = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/nums.json", "key": "3"})
+            assert "4 (number)" in num, num     # nums = [1,2,3,4,...], index 3 -> 4
+            return "list positions work via dot and [n] syntax"
+        check("get_json_value list index", gjv_list_index)
+
+        def gjv_container():
+            # a key path landing on an object/list is described + previewed
+            obj = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/config.json", "key": "models"})
+            assert "an object with 1 field" in obj, obj
+            assert "chat (text)" in obj and "qwen3:8b" in obj, obj
+            return "a value that is an object is described + previewed"
+        check("get_json_value returns a container", gjv_container)
+
+        def gjv_missing_key():
+            out = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/config.json", "key": "models.brain"})
+            assert "no 'brain' here" in out, out
+            assert "Available fields" in out and "chat" in out, out  # helps self-correct
+            oor = registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/people.json", "key": "9.name"})
+            assert "out of range" in oor, oor
+            scal = registry.dispatch(          # can't go deeper than a scalar
+                "get_json_value",
+                {"path": "jarvis_json_smoke/config.json", "key": "version.x"})
+            assert "can't go any deeper" in scal, scal
+            return "missing key / out-of-range / too-deep are friendly messages"
+        check("get_json_value miss guards", gjv_missing_key)
+
+        def gjv_ascii_and_containment():
+            # accented value forced to ASCII
+            registry.dispatch(
+                "get_json_value",
+                {"path": "jarvis_json_smoke/accent.json", "key": "city"}).encode("ascii")
+            # same home containment as read_json
+            r = registry.dispatch(
+                "get_json_value", {"path": "C:\\Windows\\win.ini", "key": "a"})
+            assert "only work inside your own folders" in r, r
+            return "ascii output + containment guard hold"
+        check("get_json_value ascii + containment", gjv_ascii_and_containment)
+
+        def gjv_guards():
+            # missing key rejected
+            assert "which field" in registry.dispatch(
+                "get_json_value", {"path": "jarvis_json_smoke/config.json"})
+            assert "which field" in registry.dispatch(
+                "get_json_value", {"path": "jarvis_json_smoke/config.json", "key": ""})
+            # missing file still reported (loader shared with read_json)
+            assert "tell me which JSON file" in registry.dispatch(
+                "get_json_value", {"key": "a.b"})
+            # wrong types must not raise
+            registry.dispatch("get_json_value", {"path": 123, "key": 456})
+            registry.dispatch("get_json_value", {"path": ["x"], "key": {}})
+            registry.dispatch("get_json_value", {"path": None, "key": None})
+            # alt arg names + a stray extra arg: still works
+            out = registry.dispatch(
+                "get_json_value",
+                {"file": "jarvis_json_smoke/config.json", "field": "models.chat",
+                 "reason": "curious"})
+            assert "qwen3:8b (text)" in out, out
+            return "guards held"
+        check("get_json_value hallucination guards", gjv_guards)
     finally:
         jd.MAX_JSONL_ROWS = saved_jsonl
         shutil.rmtree(sandbox, ignore_errors=True)

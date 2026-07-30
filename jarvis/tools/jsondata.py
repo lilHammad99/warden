@@ -158,6 +158,87 @@ def _parse_jsonl(text: str):
     return records, scanned, capped
 
 
+def _plural(n: int) -> str:
+    return "" if n == 1 else "s"
+
+
+def _load_value(raw: str):
+    """Resolve, validate and parse a JSON / JSON Lines file that lives inside the
+    user's home. Returns ``(path, value, is_jsonl, scan_note, "")`` on success or
+    ``(None, None, False, "", error_string)`` on any problem. Never raises -- this
+    is the shared front door for both ``read_json`` and ``get_json_value``."""
+    raw = _coerce(raw, MAX_PATH_LEN)
+    if not raw:
+        return None, None, False, "", "Error: tell me which JSON file to read, sir."
+
+    p, err = _resolve_under_home(raw)
+    if p is None:
+        return None, None, False, "", (err or "Error: that file path isn't valid, sir.")
+    if not p.exists():
+        return None, None, False, "", f"Error: I can't find '{_ascii(str(p))}', sir."
+    if p.is_dir():
+        return None, None, False, "", (
+            f"Error: '{_ascii(p.name)}' is a folder, sir; give me a JSON file to read.")
+
+    suffix = p.suffix.lower()
+    if suffix in _BINARY_EXT:
+        return None, None, False, "", (
+            f"Error: '{_ascii(p.name)}' isn't a JSON text file, sir, so I can't read it "
+            "as JSON.")
+
+    try:
+        size = p.stat().st_size
+    except OSError:
+        size = 0
+    if size > MAX_FILE_BYTES:
+        return None, None, False, "", (
+            f"Error: '{_ascii(p.name)}' is too large for me to read safely, sir.")
+
+    try:
+        data = p.read_bytes()
+    except Exception as e:
+        return None, None, False, "", f"Error: couldn't read that file, sir ({_ascii(str(e))})."
+    if b"\x00" in data:  # NUL byte -> almost certainly binary, not JSON text
+        return None, None, False, "", (
+            f"Error: '{_ascii(p.name)}' doesn't look like a text file, sir, so I can't "
+            "read it as JSON.")
+
+    text = data.decode("utf-8-sig", "replace")  # utf-8-sig strips a BOM if present
+    if not text.strip():
+        return None, None, False, "", f"'{_ascii(p.name)}' is empty, sir; there's nothing to read."
+
+    jsonl_hint = suffix in (".jsonl", ".ndjson")
+    if jsonl_hint:
+        try:
+            recs, _scanned, capped = _parse_jsonl(text)
+        except (ValueError, RecursionError):
+            return None, None, False, "", (
+                f"Error: '{_ascii(p.name)}' isn't valid JSON Lines, sir; the first line "
+                "doesn't parse.")
+        note = " (stopped early; more lines remain)" if capped else ""
+        return p, recs, True, note, ""
+
+    try:
+        value = json.loads(text)
+    except RecursionError:
+        return None, None, False, "", (
+            f"Error: '{_ascii(p.name)}' is nested too deeply for me to read safely, sir.")
+    except ValueError as e:
+        # maybe it's actually line-delimited JSON without the extension
+        try:
+            recs, _scanned, capped = _parse_jsonl(text)
+        except (ValueError, RecursionError):
+            return None, None, False, "", (
+                f"Error: '{_ascii(p.name)}' isn't valid JSON, sir ({_ascii(str(e))}).")
+        if len(recs) < 2:
+            return None, None, False, "", (
+                f"Error: '{_ascii(p.name)}' isn't valid JSON, sir ({_ascii(str(e))}).")
+        note = " (stopped early; more lines remain)" if capped else ""
+        return p, recs, True, note, ""
+
+    return p, value, False, "", ""
+
+
 @tool(
     "read_json",
     "Read and summarise a JSON data file: reports its structure (an object with "
@@ -183,76 +264,9 @@ def read_json(path: str = "", **extra) -> str:
     raw = _first_str(path, extra.get("file"), extra.get("document"),
                      extra.get("source"), extra.get("name"),
                      extra.get("filename"), extra.get("json"))
-    raw = _coerce(raw, MAX_PATH_LEN)
-    if not raw:
-        return "Error: tell me which JSON file to read, sir."
-
-    p, err = _resolve_under_home(raw)
-    if p is None:
-        return err or "Error: that file path isn't valid, sir."
-    if not p.exists():
-        return f"Error: I can't find '{_ascii(str(p))}', sir."
-    if p.is_dir():
-        return (f"Error: '{_ascii(p.name)}' is a folder, sir; give me a JSON file "
-                "to read.")
-
-    suffix = p.suffix.lower()
-    if suffix in _BINARY_EXT:
-        return (f"Error: '{_ascii(p.name)}' isn't a JSON text file, sir, so I "
-                "can't read it as JSON.")
-
-    try:
-        size = p.stat().st_size
-    except OSError:
-        size = 0
-    if size > MAX_FILE_BYTES:
-        return (f"Error: '{_ascii(p.name)}' is too large for me to read safely, "
-                "sir.")
-
-    try:
-        data = p.read_bytes()
-    except Exception as e:
-        return f"Error: couldn't read that file, sir ({_ascii(str(e))})."
-    if b"\x00" in data:  # NUL byte -> almost certainly binary, not JSON text
-        return (f"Error: '{_ascii(p.name)}' doesn't look like a text file, sir, "
-                "so I can't read it as JSON.")
-
-    text = data.decode("utf-8-sig", "replace")  # utf-8-sig strips a BOM if present
-    if not text.strip():
-        return f"'{_ascii(p.name)}' is empty, sir; there's nothing to read."
-
-    jsonl_hint = suffix in (".jsonl", ".ndjson")
-    value = None
-    scan_note = ""
-    is_jsonl = False
-
-    if jsonl_hint:
-        try:
-            recs, _scanned, capped = _parse_jsonl(text)
-        except (ValueError, RecursionError):
-            return (f"Error: '{_ascii(p.name)}' isn't valid JSON Lines, sir; the "
-                    "first line doesn't parse.")
-        value, is_jsonl = recs, True
-        scan_note = " (stopped early; more lines remain)" if capped else ""
-    else:
-        try:
-            value = json.loads(text)
-        except RecursionError:
-            return (f"Error: '{_ascii(p.name)}' is nested too deeply for me to "
-                    "read safely, sir.")
-        except ValueError as e:
-            # maybe it's actually line-delimited JSON without the extension
-            try:
-                recs, _scanned, capped = _parse_jsonl(text)
-            except (ValueError, RecursionError):
-                return (f"Error: '{_ascii(p.name)}' isn't valid JSON, sir "
-                        f"({_ascii(str(e))}).")
-            if len(recs) < 2:
-                return (f"Error: '{_ascii(p.name)}' isn't valid JSON, sir "
-                        f"({_ascii(str(e))}).")
-            value, is_jsonl = recs, True
-            scan_note = " (stopped early; more lines remain)" if capped else ""
-
+    p, value, is_jsonl, scan_note, err = _load_value(raw)
+    if err:
+        return err
     return _summarise(p.name, value, is_jsonl, scan_note)
 
 
@@ -292,3 +306,166 @@ def _summarise(name: str, value, is_jsonl: bool, scan_note: str) -> str:
 
     # a top-level scalar (number, text, true/false, null)
     return (f"{label} -- a single {_typename(value)} value: {_scalar(value)}.")
+
+
+# --- get_json_value: pull ONE value out of a JSON file by its key path ---------
+
+MAX_KEYPATH_LEN = 200   # a key path, not an essay
+MAX_TOKENS = 40         # cap how many steps a single key path may have
+
+
+def _tokenize(key: str):
+    """Split a key path like ``a.b[0]["c d"]`` (or ``a.b.0.c``) into a list of
+    step strings. Returns ``(tokens, "")`` or ``([], reason)``. Never raises.
+
+    A container decides at navigation time whether a numeric step is a list
+    index or a dict key, so both ``users.0.email`` and ``users[0].email`` work."""
+    key = key.strip()
+    if key[:2] == "$.":     # tolerate a JSONPath-style '$.' prefix
+        key = key[2:]
+    key = key.lstrip("$").strip()
+    tokens = []
+    buf = []
+    i, n = 0, len(key)
+    while i < n:
+        c = key[i]
+        if c == ".":
+            if buf:
+                tokens.append("".join(buf)); buf = []
+            i += 1
+        elif c == "[":
+            if buf:
+                tokens.append("".join(buf)); buf = []
+            j = key.find("]", i)
+            if j == -1:
+                return [], "unbalanced brackets"
+            inner = key[i + 1:j].strip()
+            if len(inner) >= 2 and inner[0] in "\"'" and inner[-1] == inner[0]:
+                inner = inner[1:-1]     # a quoted bracket key: ["a b"] -> a b
+            tokens.append(inner)
+            i = j + 1
+        elif c == "]":
+            return [], "unbalanced brackets"
+        else:
+            buf.append(c)
+            i += 1
+    if buf:
+        tokens.append("".join(buf))
+    tokens = [t for t in tokens if t != ""]     # drop empties from a leading/trailing dot
+    if not tokens:
+        return [], "empty"
+    if len(tokens) > MAX_TOKENS:
+        return [], "too deep"
+    return tokens, ""
+
+
+def _as_index(tok: str):
+    """(int, True) if tok is a plain integer, else (0, False)."""
+    s = str(tok).strip()
+    if s.lstrip("-").isdigit():
+        try:
+            return int(s), True
+        except ValueError:
+            return 0, False
+    return 0, False
+
+
+def _navigate(value, key_raw: str):
+    """Walk ``value`` down the parsed key path. Returns ``(result, "")`` or
+    ``(None, error_string)``. Never raises."""
+    tokens, why = _tokenize(key_raw)
+    if not tokens:
+        if why == "too deep":
+            return None, (f"Error: '{_ascii(key_raw)}' has too many steps, sir; "
+                          "give me a shorter path.")
+        return None, ("Error: tell me which field to get, sir, like "
+                      "'models.chat' or 'users.0.name'.")
+
+    cur = value
+    for tok in tokens:
+        if isinstance(cur, dict):
+            if tok in cur:
+                cur = cur[tok]
+                continue
+            idx_key, is_int = _as_index(tok)
+            if is_int and str(idx_key) in cur:   # numeric step, key stored as text
+                cur = cur[str(idx_key)]
+                continue
+            avail = ", ".join(_key(k) for k in list(cur.keys())[:MAX_KEYS]) or "(none)"
+            return None, (f"Error: there's no '{_ascii(str(tok))}' here, sir. "
+                          f"Available fields: {avail}.")
+        if isinstance(cur, list):
+            idx, ok = _as_index(tok)
+            if not ok:
+                return None, (f"Error: this is a list of {len(cur)} item(s), sir, so "
+                              f"'{_ascii(str(tok))}' needs to be a position like 0.")
+            if idx < 0 or idx >= len(cur):
+                return None, (f"Error: this list has {len(cur)} item(s), sir; "
+                              f"position {idx} is out of range.")
+            cur = cur[idx]
+            continue
+        # cur is a scalar but there are still steps to take
+        return None, (f"Error: I reached a {_typename(cur)} value before "
+                      f"'{_ascii(str(tok))}', sir, so I can't go any deeper.")
+    return cur, ""
+
+
+def _render_result(value) -> str:
+    """A bounded, pure-ASCII rendering of the value the key path landed on."""
+    if isinstance(value, dict):
+        n = len(value)
+        head = f"an object with {n} field{_plural(n)}"
+        if n:
+            head += f" ({_fields_line(value)})"
+        return head + ".\nValue:\n" + _preview(value)
+    if isinstance(value, list):
+        n = len(value)
+        head = f"a list of {n} item{_plural(n)}"
+        return head + ".\nValue:\n" + _preview(value[:5] if n > 5 else value)
+    return f"{_scalar(value)} ({_typename(value)})"
+
+
+@tool(
+    "get_json_value",
+    "Get ONE specific value out of a JSON (or .jsonl) data file by its key path. "
+    "Use this when the user wants a single field, not a whole-file summary "
+    "('what's the chat model in my config', 'get models.chat from settings.json', "
+    "'what is the email of the first user', 'what's the total in this json'). "
+    "Give path (the file; find it with find_files first if you don't have it) and "
+    "key -- a dotted path where dots go into objects and numbers pick a list "
+    "position, e.g. 'models.chat', 'users.0.email', 'items[2].price'. To summarise "
+    "a whole file instead, use read_json. Only the user's own folders are allowed.",
+    {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "The JSON file to read, e.g. 'Downloads/config.json'.",
+            },
+            "key": {
+                "type": "string",
+                "description": "The key path to the value, e.g. 'models.chat' or 'users.0.email'.",
+            },
+        },
+        "required": ["path", "key"],
+    },
+)
+def get_json_value(path: str = "", key: str = "", **extra) -> str:
+    raw = _first_str(path, extra.get("file"), extra.get("document"),
+                     extra.get("source"), extra.get("filename"), extra.get("json"))
+    key_raw = _first_str(key, extra.get("field"), extra.get("keypath"),
+                         extra.get("key_path"), extra.get("query"),
+                         extra.get("name"), extra.get("keys"))
+    key_raw = _coerce(key_raw, MAX_KEYPATH_LEN)
+    if not key_raw:
+        return ("Error: tell me which field to get, sir, like 'models.chat' or "
+                "'users.0.name'.")
+
+    p, value, _is_jsonl, _note, err = _load_value(raw)
+    if err:
+        return err
+
+    result, nav_err = _navigate(value, key_raw)
+    if nav_err:
+        return nav_err
+    return f"{_ascii(p.name)} -> {_ascii(key_raw)} = {_render_result(result)}"
