@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
-Sections: imports, tools, memory, shell, find, clipboard, tasks, calc, dates,
-reminders, dispatch, agent, camera, vision, tts, hud, watch, e2e, all
+Sections: imports, tools, memory, shell, find, search, clipboard, tasks, calc,
+dates, reminders, dispatch, agent, camera, vision, tts, hud, watch, e2e, all
 (default: safe set)
 """
 
@@ -24,7 +24,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, calc, camera, clipboard, dates, files, find, memory, registry, reminders, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, browser, calc, camera, clipboard, dates, files, find, memory, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -211,6 +211,114 @@ def t_find():
             assert "No files matching" in out, out
             return "no-match message ok"
         check("find no-match message", no_match_is_friendly)
+    finally:
+        import shutil
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_search():
+    """Exercises the search_files tool (content search) + its defenses against
+    8B hallucinations. Uses a temp tree inside the user's home (search only
+    looks under home), so no models are needed and it lives in the safe set."""
+    import os
+    import pathlib
+    from jarvis.tools import search  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_search_smoke"
+    (sandbox / "sub").mkdir(parents=True, exist_ok=True)
+    (sandbox / "notes.txt").write_text(
+        "shopping list\nthe wifi password is hunter2\nremember the milk\n",
+        encoding="utf-8")
+    (sandbox / "sub" / "diary.md").write_text(
+        "today I worked on the BUDGET report\nand nothing else\n",
+        encoding="utf-8")
+    # a file with non-ASCII content: match line must be sanitised, not crash
+    (sandbox / "accents.txt").write_text(
+        "cafe budget expose naive\n", encoding="utf-8")
+    # a pruned dir that must NOT be descended into
+    (sandbox / "node_modules").mkdir(exist_ok=True)
+    (sandbox / "node_modules" / "junk.txt").write_text(
+        "wifi password leak here\n", encoding="utf-8")
+    # a binary file that must be skipped, not read as text
+    (sandbox / "blob.bin").write_bytes(b"wifi password\x00\x01\x02binary")
+
+    try:
+        def happy_path():
+            out = registry.dispatch(
+                "search_files", {"query": "wifi password", "folder": "jarvis_search_smoke"})
+            assert "notes.txt" in out, out
+            assert "hunter2" in out, out          # the matched line is shown
+            assert "2:" in out                    # with its line number
+            return "found text + line number"
+        check("search happy path", happy_path)
+
+        def case_insensitive_and_nested():
+            # lower-case query matches upper-case text in a nested file
+            out = registry.dispatch(
+                "search_files", {"query": "budget", "folder": "jarvis_search_smoke"})
+            assert "diary.md" in out, out
+            return "case-insensitive + nested ok"
+        check("search case-insensitive nested", case_insensitive_and_nested)
+
+        def name_filter():
+            # limiting to *.md must exclude notes.txt / accents.txt
+            out = registry.dispatch(
+                "search_files",
+                {"query": "budget", "folder": "jarvis_search_smoke", "name": "*.md"})
+            assert "diary.md" in out and "accents.txt" not in out, out
+            return "name pattern filter ok"
+        check("search name filter", name_filter)
+
+        def prunes_and_skips_binary():
+            out = registry.dispatch(
+                "search_files", {"query": "wifi password", "folder": "jarvis_search_smoke"})
+            # node_modules pruned -> its junk.txt hit must not appear
+            assert "junk.txt" not in out, f"node_modules not pruned: {out}"
+            # binary file skipped -> blob.bin must not appear
+            assert "blob.bin" not in out, f"binary not skipped: {out}"
+            return "noise dirs pruned + binary skipped"
+        check("search prunes noise + skips binary", prunes_and_skips_binary)
+
+        def output_is_ascii():
+            out = registry.dispatch(
+                "search_files", {"query": "budget", "folder": "jarvis_search_smoke"})
+            out.encode("ascii")  # raises if any non-ASCII leaked through
+            return "output stayed pure ASCII"
+        check("search ascii-only output", output_is_ascii)
+
+        def containment_guard():
+            # searching outside the home folder must be refused, not run
+            r = registry.dispatch(
+                "search_files", {"query": "password", "folder": "C:\\Windows"})
+            assert "only search inside your own folders" in r, r
+            return "escape outside home blocked"
+        check("search containment guard", containment_guard)
+
+        def hallucination_guards():
+            assert "Error" in registry.dispatch("search_files", {"query": ""})
+            assert "Error" in registry.dispatch("search_files", {})   # missing arg
+            # wrong types must not raise
+            registry.dispatch("search_files", {"query": 123, "folder": "jarvis_search_smoke"})
+            registry.dispatch("search_files", {"query": "x", "folder": "jarvis_search_smoke", "name": 5})
+            # bare '*' name filter is treated as no filter, not a crash
+            registry.dispatch(
+                "search_files",
+                {"query": "wifi", "folder": "jarvis_search_smoke", "name": "*"})
+            # missing folder is a friendly message, not a crash
+            miss = registry.dispatch(
+                "search_files", {"query": "x", "folder": "jarvis_search_smoke/nope"})
+            assert "does not exist" in miss, miss
+            return "guards held"
+        check("search hallucination guards", hallucination_guards)
+
+        def no_match_is_friendly():
+            out = registry.dispatch(
+                "search_files", {"query": "zzzznotathing", "folder": "jarvis_search_smoke"})
+            assert "No files containing" in out, out
+            return "no-match message ok"
+        check("search no-match message", no_match_is_friendly)
     finally:
         import shutil
         shutil.rmtree(sandbox, ignore_errors=True)
@@ -734,7 +842,8 @@ def t_e2e():
 
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
-            "shell": t_shell, "find": t_find, "clipboard": t_clipboard,
+            "shell": t_shell, "find": t_find, "search": t_search,
+            "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
@@ -746,7 +855,8 @@ if __name__ == "__main__":
         for fn in SECTIONS.values():
             fn()
     elif which == "safe":
-        t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_clipboard()
+        t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
+        t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

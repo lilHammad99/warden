@@ -1,4 +1,4 @@
-# HANDOFF — Jarvis build status (2026-07-29)
+# HANDOFF — Jarvis build status (2026-07-30)
 
 Read this first if you are a new Claude session taking over.
 
@@ -55,6 +55,23 @@ floating "Jarvis orb" HUD and wake tuning. See
 - `tests/smoke.py hud` passes (window drew, ok=True). STILL not human-tested
   with a real "Hey Jarvis" — that + threshold tuning is the next step.
 - Chosen (brainstorm): keep qwen3:8b brain; did NOT swap to a faster model.
+
+## 2026-07-30 — Search inside files (Phase 15)
+
+Added `search_files` (`jarvis/tools/search.py`): content search INSIDE files,
+the natural complement to `find_files` (which matches names). Model can now
+answer "which note has the wifi password", "find where I wrote about the
+budget" and get the matching files + lines with line numbers.
+- Reuses `find_files`' home-containment check and `_SKIP_DIRS` (imported from
+  `.find`), so it can never grep outside the user's home or into system/heavy
+  dirs. Text only: binary by extension AND NUL-byte sniff, >2 MB files skipped.
+  Bounded on depth/files/entries/matches + wall-clock budget. Matched lines are
+  forced to single-line bounded pure ASCII. Never raises.
+- Wired into `app.py` imports, agent system prompt (when to use search_files
+  vs find_files), and the console "Try:" line.
+- `tests/smoke.py search` added to the safe set (happy path, line numbers,
+  case-insensitive/nested, name filter, pruning, binary skip, ASCII-only,
+  containment + hallucination guards). Full safe set: 45 tools, all PASS.
 
 ## How to test (in order)
 

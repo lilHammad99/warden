@@ -202,6 +202,34 @@
       absolute times, deterministic firing, cancel by text+number, the
       hallucination guards, and corrupt-store recovery
 
+### Phase 15 — Search inside files (2026-07-30)
+- [x] `search_files` tool (`jarvis/tools/search.py`): content search INSIDE the
+      user's files, complementing `find_files` (which matches names). The 8B
+      model can now answer "which note has the wifi password", "find where I
+      wrote about the budget", "which script calls set_volume" and get back the
+      matching files AND lines with their line numbers — a real autonomy win
+- [x] Optional `folder` (like 'Documents') and `name` glob (like '*.txt') to
+      narrow the scan; matching is case-insensitive substring (no regex, so no
+      catastrophic backtracking)
+- [x] Rooted in the user's home only (shares `find_files`' containment check):
+      a folder outside home is REJECTED, so it can never grep `C:\Windows` or
+      all of `C:\`; system/heavy dirs pruned (AppData, node_modules, .git, ...)
+- [x] Text only + bounded everywhere: binary files (by extension AND a NUL-byte
+      sniff) and >2 MB files skipped; caps on depth, files opened, entries
+      scanned, matches (total + per file), and a hard wall-clock time budget —
+      a broad query stops early with a clear note instead of hanging the agent
+- [x] Hardened vs 8B hallucinations: wrong-type/empty/missing args coerced or
+      rejected, bare-`*` name filter treated as no filter, matched lines forced
+      to single-line bounded pure ASCII (a file full of odd bytes can't corrupt
+      the console/context), unreadable files skipped — never raises
+- [x] Agent system prompt now tells the model when to pick `search_files`
+      (contents) vs `find_files` (names); "Try:" line suggests "which file
+      mentions the wifi password"; all console output stays pure ASCII
+- [x] `tests/smoke.py search` (in the safe set) covers the happy path, line
+      numbers, case-insensitive + nested match, the `name` filter, dir pruning,
+      binary skipping, ASCII-only output, the containment guard, and the
+      hallucination guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.

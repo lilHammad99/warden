@@ -48,6 +48,11 @@ Rules:
   list", "put ... on my list", "I need to"), call add_task. To show it call
   list_tasks; to check something off call complete_task; to delete call
   remove_task. Anything under "The user's current to-do list" below is open.
+- Finding things on the PC: to locate a file by its NAME ("open my budget
+  spreadsheet", "read my CV"), call find_files. To find WHICH file contains some
+  text, or information the user saved but can't locate ("which note has the wifi
+  password", "find where I wrote about the budget"), call search_files with the
+  text. find_files searches names; search_files searches file contents.
 - Reminders/timers: when the user wants to be told something at a LATER time
   ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
   17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)

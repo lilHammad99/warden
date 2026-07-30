@@ -40,6 +40,7 @@ def main():
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
     from .tools import reminders as reminder_store  # noqa: F401
+    from .tools import search  # noqa: F401
     from .tools import shell  # noqa: F401
     from .tools import tasks as task_list  # noqa: F401
     from .tools import registry
@@ -117,7 +118,8 @@ def main():
               "on your to-do list. Say 'what's on my list' to hear it.")
     print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
           "remind me in 10 minutes to stretch / how many days until christmas / "
-          "add milk to my to-do list / find my resume\n")
+          "add milk to my to-do list / find my resume / "
+          "which file mentions the wifi password\n")
 
     while True:
         try:
