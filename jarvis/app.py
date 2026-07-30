@@ -29,6 +29,7 @@ def main():
     # importing tool modules registers their tools
     from .tools import apps, files, system, web  # noqa: F401
     from .tools import camera  # noqa: F401
+    from .tools import clipboard  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
     from .tools import shell  # noqa: F401
@@ -71,7 +72,8 @@ def main():
           f" | voice: {voice_status} | browser tools: {'on' if browser_ok else 'off'}")
     print(f"memory: {mem_status}  ({len(registry.specs())} tools online)")
     print(_greeting())
-    print("Type your command ('exit' to quit). Try: start working / find my resume / what do you see\n")
+    print("Type your command ('exit' to quit). Try: start working / find my "
+          "resume / read my clipboard / what do you see\n")
 
     while True:
         try:
@@ -91,8 +93,12 @@ def main():
                 b.shutdown()
             sys.exit(0)
         hud.state("thinking")
+        import time as _time
+        _t0 = _time.monotonic()
         reply = agent.chat(text, status=lambda s: print(f"  {s}", flush=True))
-        print(f"jarvis> {reply}\n")
+        _dt = _time.monotonic() - _t0
+        print(f"jarvis> {reply}")
+        print(f"  (answered in {_dt:.1f}s)\n")
         hud.state("speaking")
         speaker.say(reply)
         hud.state(resting)

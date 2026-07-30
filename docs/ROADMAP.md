@@ -71,6 +71,23 @@
 - [x] `tests/smoke.py find` (in the safe set) covers matches, wildcards, dir
       pruning, the containment guard, and the hallucination guards
 
+### Phase 9 — Clipboard access (2026-07-30)
+- [x] `get_clipboard` / `set_clipboard` tools (`jarvis/tools/clipboard.py`): the
+      model can read whatever the user just copied from ANY app ("summarize what
+      I copied", "translate my clipboard") and put its answer back for the user
+      to paste with Ctrl+V ("copy that") — bridges every other program to Jarvis
+- [x] Implemented on the Win32 clipboard API via `ctypes` (Unicode-correct,
+      `CF_UNICODETEXT`), 64-bit-safe handle argtypes; no new dependency
+- [x] Hardened vs 8B hallucinations: wrong-type/empty/missing args coerced or
+      rejected, reads capped + truncated, oversized writes refused, locked
+      clipboard retried then reported, image/empty clipboard handled — never
+      raises, never crashes the agent
+- [x] Console now shows how long each reply took ("answered in N.Ns") and
+      suggests "read my clipboard"; all output stays pure ASCII
+- [x] `tests/smoke.py clipboard` (in the safe set) covers the round-trip, the
+      hallucination guards, and bounded reads; saves/restores the real
+      clipboard so the test is non-invasive
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.

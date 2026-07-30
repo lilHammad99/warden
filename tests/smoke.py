@@ -22,7 +22,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, camera, files, find, memory, registry, shell, system, web  # noqa
+        from jarvis.tools import apps, browser, camera, clipboard, files, find, memory, registry, shell, system, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -214,6 +214,53 @@ def t_find():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def t_clipboard():
+    """Exercises the clipboard tools + their defenses against 8B
+    hallucinations. No model needed, so it lives in the safe set. The user's
+    current clipboard text is saved and restored so the cycle is non-invasive."""
+    from jarvis.tools import clipboard as clip  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    # save whatever the user currently has, to restore afterwards
+    saved_text, _ = clip._read_clipboard_text()
+
+    try:
+        def round_trip():
+            marker = "Jarvis clipboard smoke test 12345"
+            out = registry.dispatch("set_clipboard", {"text": marker})
+            assert "Copied" in out, out
+            back = registry.dispatch("get_clipboard", {})
+            assert marker in back, back
+            return "set -> get round-trip ok"
+        check("clipboard round-trip", round_trip)
+
+        def hallucination_guards():
+            # empty / missing / wrong-type text must not crash or store junk
+            assert "Error" in registry.dispatch("set_clipboard", {"text": ""})
+            assert "Error" in registry.dispatch("set_clipboard", {})
+            # wrong type is coerced, not crashed
+            assert "Copied" in registry.dispatch("set_clipboard", {"text": 42})
+            assert "42" in registry.dispatch("get_clipboard", {})
+            # oversized write is rejected, not dumped into memory
+            big = registry.dispatch("set_clipboard", {"text": "x" * (clip.MAX_WRITE + 10)})
+            assert "too much" in big, big
+            return f"guards held (max_write={clip.MAX_WRITE})"
+        check("clipboard hallucination guards", hallucination_guards)
+
+        def read_is_bounded():
+            # a huge clipboard is truncated on read, never returned unbounded
+            registry.dispatch("set_clipboard", {"text": "y" * (clip.MAX_READ + 500)})
+            out = registry.dispatch("get_clipboard", {})
+            assert "truncated" in out, "large clipboard not truncated"
+            assert len(out) < clip.MAX_READ + 200, "read not bounded"
+            return "large read truncated"
+        check("clipboard read bounded", read_is_bounded)
+    finally:
+        # restore the user's original clipboard text if we had it
+        if saved_text:
+            clip._write_clipboard_text(saved_text)
+
+
 def t_agent():
     from jarvis import config as c
     from jarvis.agent import Agent
@@ -313,9 +360,9 @@ def t_e2e():
 
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
-            "shell": t_shell, "find": t_find, "agent": t_agent,
-            "camera": t_camera, "vision": t_vision, "tts": t_tts,
-            "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
+            "shell": t_shell, "find": t_find, "clipboard": t_clipboard,
+            "agent": t_agent, "camera": t_camera, "vision": t_vision,
+            "tts": t_tts, "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "safe"
@@ -323,7 +370,7 @@ if __name__ == "__main__":
         for fn in SECTIONS.values():
             fn()
     elif which == "safe":
-        t_imports(); t_tools(); t_memory(); t_shell(); t_find()
+        t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_clipboard()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")
