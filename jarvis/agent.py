@@ -67,7 +67,10 @@ Rules:
   file, to reorganise it call move_file (to move it into a folder or rename it)
   or copy_file (to duplicate it). Give source and dest; dest is either a folder
   or a new name. Neither ever overwrites an existing file, so if one already
-  exists there, tell the user rather than retrying. To back up, archive, or zip
+  exists there, tell the user rather than retrying. To create a new folder to
+  organise things ("make a folder called Taxes in Documents", "create a Projects
+  folder on my Desktop"), call make_folder with path (e.g. 'Documents/Taxes');
+  do this first if you need somewhere to move files into. To back up, archive, or zip
   files ("back up my Documents", "zip my resume and cv to send"), call zip_files
   with sources (a file, a folder, or several files separated by commas) and dest
   (a name for the .zip); the originals are left in place and an existing archive

@@ -40,6 +40,7 @@ from .registry import tool
 MAX_PATH_LEN = 400                       # a path, not an essay
 MAX_NAME_LEN = 200                       # a file name, not a paragraph
 MAX_COPY_BYTES = 500 * 1024 * 1024       # refuse to copy anything bigger (500 MB)
+MAX_NEW_DEPTH = 12                       # cap how deep a single make_folder may nest
 
 
 def _ascii(text: str) -> str:
@@ -248,3 +249,75 @@ def _mb(n: int) -> str:
     if mb >= 1.0:
         return f"{mb:.1f} MB"
     return f"{n / 1024.0:.1f} KB"
+
+
+@tool(
+    "make_folder",
+    "Create a new folder (directory) in the user's own folders. Use this when "
+    "the user asks to make/create a folder or directory to organise things "
+    "('make a folder called Taxes in Documents', 'create a Projects folder on "
+    "my Desktop'), typically before moving files into it with move_file. Give "
+    "path: the folder to create, e.g. 'Documents/Taxes' or 'Desktop/Projects'. "
+    "Only the user's own folders are allowed; an existing folder is left as-is "
+    "and an existing file is never overwritten.",
+    {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "The folder to create, e.g. 'Documents/Taxes' or "
+                "'Desktop/Projects'.",
+            },
+            "parent": {
+                "type": "string",
+                "description": "Optional folder to create it inside, e.g. "
+                "'Documents'. Usually you can just put this in path instead.",
+            },
+        },
+        "required": ["path"],
+    },
+)
+def make_folder(path: str = "", parent: str = "", **extra) -> str:
+    raw = _first_str(path, extra.get("folder"), extra.get("name"),
+                     extra.get("directory"), extra.get("dir"),
+                     extra.get("dest"), extra.get("destination"),
+                     extra.get("new_folder"), extra.get("folder_name"))
+    raw = _coerce(raw, MAX_PATH_LEN)
+    if not raw:
+        return "Error: tell me what to call the folder, sir."
+
+    parent_raw = _first_str(parent, extra.get("in"), extra.get("location"),
+                            extra.get("under"), extra.get("inside"),
+                            extra.get("parent_folder"))
+    parent_raw = _coerce(parent_raw, MAX_PATH_LEN)
+    if parent_raw and not Path(raw).is_absolute():
+        # "Taxes" inside "Documents" -> "Documents/Taxes"
+        raw = str(Path(parent_raw) / raw)
+
+    target, err = _resolve_under_home(raw)
+    if target is None:
+        return err or "Error: that folder name isn't valid, sir."
+
+    home = Path(HOME).resolve()
+    if target == home:
+        return "Error: that is your home folder, sir; it already exists."
+    try:
+        depth = len(target.relative_to(home).parts)
+    except ValueError:
+        depth = MAX_NEW_DEPTH + 1  # not under home (shouldn't happen; be safe)
+    if depth > MAX_NEW_DEPTH:
+        return ("Error: that folder path is nested too deeply, sir; give me a "
+                "simpler location.")
+
+    if target.exists():
+        if target.is_dir():
+            return f"That folder already exists, sir ({_ascii(str(target))})."
+        return (f"Error: '{_ascii(str(target))}' already exists as a file, sir; "
+                "I won't overwrite it. Pick another name.")
+
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return f"Error: couldn't create that folder, sir ({_ascii(str(e))})."
+
+    return f"Created folder {_ascii(str(target))}, sir."

@@ -238,12 +238,38 @@ remove). Jarvis can now act on "delete that draft", "remove the old screenshot",
   empty/missing/wrong-type guards. Full safe set: 106 checks, all PASS
   (53 tools registered with the optional browser module).
 
+## 2026-07-30 — Create folders (Phase 23)
+
+Added `make_folder` (`jarvis/tools/organize.py`, alongside move_file/copy_file):
+the missing primitive in the file-organise family. move_file/copy_file could drop
+a file INTO a folder but couldn't CREATE one, so "make a folder called Taxes in
+Documents" then "move my receipts into it" was impossible. Now Jarvis can make the
+destination first and organise into it.
+- Arg `path` (e.g. 'Documents/Taxes'); intermediate parents created too. Also
+  accepts a bare `name` + separate `parent` folder. Reuses
+  `organize._resolve_under_home` so a path outside home -- including a `..`-escape
+  (resolved + re-checked) -- is REFUSED; can't create under `C:\Windows`.
+- Never destructive: an existing folder is a friendly no-op (not an error); a path
+  that already exists as a FILE is refused, never overwritten; the home folder
+  itself is never "created". Depth-capped (`MAX_NEW_DEPTH`, 12) so one hallucinated
+  call can't spawn an absurdly deep tree. Empty/whitespace/missing args rejected,
+  wrong types coerced, alt arg names (`name`/`directory`/`dir`/`folder`/...),
+  output pure ASCII. Never raises.
+- Auto-registers via the already-present `organize` import in `app.py`; wired into
+  the agent system prompt (make_folder after the move/copy bullet, "make one first
+  if you need somewhere to move files into") and the console "Try:" line ("make a
+  folder called taxes in documents").
+- `tests/smoke.py makefolder` added to the safe set: nested-create (parents too),
+  parent+name shape, existing-folder no-op, refuse-over-a-file, alt arg names,
+  containment (absolute + `..`-escape), depth cap, ASCII-only, and the
+  empty/whitespace/missing/wrong-type guards. Full safe set: 121 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 22 that is 47 without browser, 53 with (52 + `recycle_file`). No
+after Phase 23 that is 48 without browser, 54 with (53 + `make_folder`). No
 tools are being silently dropped.
 
 ## How to test (in order)

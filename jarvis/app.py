@@ -127,6 +127,7 @@ def main():
           "how many days until christmas / add milk to my to-do list / "
           "find my resume / which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "
+          "make a folder called taxes in documents / "
           "back up my documents into a zip / unzip my backup / "
           "delete that old draft to the recycle bin / "
           "actually my wifi password changed to hunter2\n")

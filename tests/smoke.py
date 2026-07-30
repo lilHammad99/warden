@@ -1,7 +1,8 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-archive, extract, recycle, clipboard, tasks, calc, dates, convert, reminders,
-dispatch, agent, camera, vision, tts, hud, watch, e2e, all (default: safe set)
+makefolder, archive, extract, recycle, clipboard, tasks, calc, dates, convert,
+reminders, dispatch, agent, camera, vision, tts, hud, watch, e2e, all
+(default: safe set)
 """
 
 import sys
@@ -628,6 +629,115 @@ def t_organize():
         check("organize hallucination guards", hallucination_guards)
     finally:
         org.MAX_COPY_BYTES = saved_cap
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_makefolder():
+    """Exercises the make_folder tool (create a directory to organise into) + its
+    defenses against 8B hallucinations. Works entirely inside a temp tree in the
+    user's home (the only place it touches), so it is deterministic, needs no
+    model, and lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import organize as org  # noqa: F401  (register make_folder)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_makefolder_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    saved_depth = org.MAX_NEW_DEPTH
+    try:
+        def creates_nested_folder():
+            # a multi-part path creates intermediate parents too
+            out = registry.dispatch("make_folder",
+                {"path": "jarvis_makefolder_smoke/Taxes/2026"})
+            assert "Created folder" in out, out
+            assert (sandbox / "Taxes" / "2026").is_dir(), "folder not created"
+            return "created a nested folder (parents too)"
+        check("make_folder creates nested folder", creates_nested_folder)
+
+        def parent_plus_name():
+            # the model may give a bare name + a separate parent folder
+            out = registry.dispatch("make_folder",
+                {"path": "Projects", "parent": "jarvis_makefolder_smoke"})
+            assert "Created folder" in out, out
+            assert (sandbox / "Projects").is_dir(), out
+            return "parent + bare name joined"
+        check("make_folder parent + name", parent_plus_name)
+
+        def already_exists_is_friendly():
+            # re-creating an existing folder is a friendly no-op, not an error
+            registry.dispatch("make_folder", {"path": "jarvis_makefolder_smoke/Dup"})
+            out = registry.dispatch("make_folder", {"path": "jarvis_makefolder_smoke/Dup"})
+            assert "already exists" in out and "Error" not in out, out
+            return "existing folder is a friendly no-op"
+        check("make_folder existing folder", already_exists_is_friendly)
+
+        def refuses_over_a_file():
+            # a path that already exists as a FILE is refused, never overwritten
+            (sandbox / "note.txt").write_text("keep me", encoding="utf-8")
+            out = registry.dispatch("make_folder",
+                {"path": "jarvis_makefolder_smoke/note.txt"})
+            assert "already exists as a file" in out, out
+            assert (sandbox / "note.txt").read_text(encoding="utf-8") == "keep me"
+            return "won't clobber an existing file with a folder"
+        check("make_folder refuses over a file", refuses_over_a_file)
+
+        def alt_arg_names():
+            # the model may use name=/directory= instead of path
+            out = registry.dispatch("make_folder",
+                {"name": "jarvis_makefolder_smoke/Alt"})
+            assert "Created folder" in out, out
+            assert (sandbox / "Alt").is_dir(), out
+            return "alt name/directory arg names handled"
+        check("make_folder alt arg names", alt_arg_names)
+
+        def containment_guard():
+            # creating OUTSIDE the user's home must be refused, never made
+            r = registry.dispatch("make_folder", {"path": "C:\\Windows\\Jarvis_evil"})
+            assert "only work inside your own folders" in r, r
+            assert not pathlib.Path("C:\\Windows\\Jarvis_evil").exists()
+            # a ..-escape out of home is also refused (resolved + re-checked)
+            r2 = registry.dispatch("make_folder",
+                {"path": "jarvis_makefolder_smoke/../../../Windows/Jarvis_evil2"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked"
+        check("make_folder containment guard", containment_guard)
+
+        def depth_cap():
+            org.MAX_NEW_DEPTH = 3              # temporarily tiny
+            deep = "jarvis_makefolder_smoke/" + "/".join(f"d{i}" for i in range(10))
+            r = registry.dispatch("make_folder", {"path": deep})
+            assert "too deeply" in r, r
+            assert not (sandbox / "d0").exists(), "deep tree created despite cap"
+            org.MAX_NEW_DEPTH = saved_depth
+            return "over-deep path refused"
+        check("make_folder depth cap", depth_cap)
+
+        def output_is_ascii():
+            registry.dispatch("make_folder",
+                {"path": "jarvis_makefolder_smoke/Asc"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("make_folder ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # empty / whitespace / missing args -> friendly error, never a crash
+            assert "Error" in registry.dispatch("make_folder", {"path": ""})
+            assert "Error" in registry.dispatch("make_folder", {"path": "   "})
+            assert "Error" in registry.dispatch("make_folder", {})
+            # the home folder itself is not "created"
+            assert "home folder" in registry.dispatch("make_folder", {"path": "~"})
+            # wrong types must not raise
+            registry.dispatch("make_folder", {"path": 123})
+            registry.dispatch("make_folder", {"path": ["a"]})
+            registry.dispatch("make_folder", {"path": {}})
+            return "guards held"
+        check("make_folder hallucination guards", hallucination_guards)
+    finally:
+        org.MAX_NEW_DEPTH = saved_depth
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
@@ -1658,7 +1768,8 @@ def t_e2e():
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
-            "recent": t_recent, "organize": t_organize, "archive": t_archive,
+            "recent": t_recent, "organize": t_organize,
+            "makefolder": t_makefolder, "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert,
@@ -1673,8 +1784,8 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_archive(); t_extract(); t_recycle()
-        t_clipboard()
+        t_recent(); t_organize(); t_makefolder(); t_archive(); t_extract()
+        t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

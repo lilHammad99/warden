@@ -459,6 +459,39 @@
       Recycle Bin call is swapped for a hermetic fake, so the test is
       deterministic and never touches the user's real bin
 
+### Phase 23 — Create folders (2026-07-30)
+- [x] `make_folder` tool (`jarvis/tools/organize.py`): the missing primitive in
+      the file-organisation family. The navigation tools LOCATE a file and
+      move/copy REARRANGE it, but move_file/copy_file can only drop a file into a
+      folder that already exists -- there was no way to CREATE one. Now Jarvis can
+      make somewhere to organise into ("make a folder called Taxes in Documents",
+      "create a Projects folder on my Desktop") and then move files into it -- a
+      real autonomy win that completes the organise workflow
+- [x] Give `path` (the folder to create, e.g. 'Documents/Taxes'); intermediate
+      parent folders are created too. The model may instead pass a bare `name`
+      plus a separate `parent` folder -- both are handled
+- [x] Rooted in the user's home only (shares `find_files`' containment via
+      `organize._resolve_under_home`): a path outside home is REJECTED (including
+      a `..`-escape, which is resolved and re-checked), so Jarvis can never create
+      a folder in `C:\Windows` or outside the user's own folders
+- [x] Never destructive: an existing folder is a friendly no-op (not an error),
+      and a path that already exists as a FILE is refused rather than overwritten;
+      the home folder itself is never "created". Bounded: a path nested deeper
+      than `MAX_NEW_DEPTH` (12) is refused so one hallucinated call can't spawn an
+      absurdly deep tree
+- [x] Hardened vs 8B hallucinations: empty/whitespace/missing args rejected,
+      wrong types coerced, alt arg names accepted (`name`/`directory`/`dir`/
+      `folder`/`dest`/...), all output forced to pure ASCII -- never raises, never
+      crashes the agent
+- [x] Agent system prompt now steers "make/create a folder" to `make_folder`
+      (and to make one first when it needs somewhere to move files into); the
+      console "Try:" line suggests "make a folder called taxes in documents"
+- [x] `tests/smoke.py makefolder` (in the safe set) covers creating a nested
+      folder (parents too), the parent+bare-name shape, the existing-folder
+      no-op, refusing to clobber a file, alt arg names, the containment guard
+      (absolute AND `..`-escape), the depth cap, ASCII-only output, and the
+      empty/whitespace/missing/wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -494,6 +527,8 @@
 - [x] File management: opt-in delete-to-Recycle-Bin -- done in Phase 22
       (`recycle_file`); undoable (Windows Recycle Bin), files-only, size-capped,
       home-contained, no permanent-delete path
+- [x] File management: create a new folder to organise into -- done in Phase 23
+      (`make_folder`); home-contained, depth-capped, never overwrites a file
 - [ ] File management next: moving whole folders with move_file; recycling whole
       folders with recycle_file (needs the same care as files-only today)
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
