@@ -73,6 +73,24 @@ budget" and get the matching files + lines with line numbers.
   case-insensitive/nested, name filter, pruning, binary skip, ASCII-only,
   containment + hallucination guards). Full safe set: 45 tools, all PASS.
 
+## 2026-07-30 — Update a remembered fact (Phase 16)
+
+Added `update_fact` (`jarvis/tools/memory.py`, alongside remember/recall/forget):
+the model can CORRECT or replace an existing fact instead of storing a second,
+contradicting one ("actually my wifi password changed to ...", "my meeting moved
+to Tuesday"). Closes the top memory item in ROADMAP Future work.
+- Args `old` (a few words identifying the existing fact) + `new` (corrected
+  wording). Single match -> replaced in place (count unchanged, ts refreshed),
+  reflected instantly in `recall` and the injected preamble. Mirrors `forget`'s
+  safety: several matches -> nothing changes + matches listed; no match -> told
+  to use `remember`; `new` duplicating a DIFFERENT fact -> old dropped, no dup.
+- Hardened like the rest: empty old/new rejected, over-long `new` truncated
+  (MAX_FACT_LEN), wrong types coerced, no-op reported, atomic `_save`, corrupt
+  recovery inherited. Never raises.
+- Wired into the agent system prompt (steer "X changed/was wrong" to update_fact)
+  and the console "Try:" line. `tests/smoke.py memory` (safe set) gains two
+  update_fact checks (happy path + guards). Full safe set: 45 tools, all PASS.
+
 ## How to test (in order)
 
 ```

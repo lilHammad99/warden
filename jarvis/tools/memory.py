@@ -183,6 +183,68 @@ def forget(query: str = "") -> str:
     return f'Forgotten: "{matches[0]["text"]}"'
 
 
+@tool(
+    "update_fact",
+    "Correct or replace a fact already in long-term memory, instead of adding "
+    "a second one that contradicts it. Give a few words that identify the "
+    "existing fact ('old') and the corrected wording ('new'). Use this when "
+    "something you remembered has CHANGED (a moved meeting, a new password, a "
+    "corrected address). For safety, if several facts match 'old', nothing "
+    "changes and the matches are listed so you can be more specific. If nothing "
+    "matches, save it with remember instead.",
+    {
+        "type": "object",
+        "properties": {
+            "old": {
+                "type": "string",
+                "description": "A few words identifying the existing fact to change",
+            },
+            "new": {
+                "type": "string",
+                "description": "The corrected/updated wording of the fact",
+            },
+        },
+        "required": ["old", "new"],
+    },
+)
+def update_fact(old: str = "", new: str = "") -> str:
+    q, _ = _clean(old, MAX_QUERY_LEN)
+    text, truncated = _clean(new, MAX_FACT_LEN)
+    if not q:
+        return "Error: tell me which fact to update, sir."
+    if not text:
+        return "Error: tell me what the fact should now say, sir."
+    ql = q.lower()
+    note = " (shortened to fit)" if truncated else ""
+    with _LOCK:
+        facts = _load()
+        matches = [f for f in facts if ql in f["text"].lower()]
+        if not matches:
+            return (f'Nothing in memory matches "{q}", sir. Use remember to '
+                    "save it as a new fact.")
+        if len(matches) > 1:
+            listed = "\n".join(f"- {m['text']}" for m in matches[:RECALL_LIMIT])
+            return (f'That matches {len(matches)} memories — please be more '
+                    f"specific about which to update. Matches:\n{listed}")
+        target = matches[0]
+        old_text = target["text"]
+        if text.lower() == old_text.lower():
+            return f'That memory already says: "{old_text}"'
+        # if the new wording duplicates a DIFFERENT existing fact, don't store a
+        # duplicate — drop the old one and keep the wording already remembered
+        dup = next((f for f in facts
+                    if f is not target and f["text"].lower() == text.lower()), None)
+        if dup is not None:
+            facts.remove(target)
+            _save(facts)
+            return (f'Updated{note}: dropped "{old_text}" — I already remember '
+                    f'"{dup["text"]}".')
+        target["text"] = text
+        target["ts"] = datetime.now().strftime("%Y-%m-%d")
+        _save(facts)
+    return f'Updated{note}: "{old_text}" -> "{text}"'
+
+
 # --------------------------------------------------------------------------
 # used by the agent (not a tool) to inject stored facts into the prompt
 # --------------------------------------------------------------------------

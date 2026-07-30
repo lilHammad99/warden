@@ -119,7 +119,8 @@ def main():
     print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
           "remind me in 10 minutes to stretch / how many days until christmas / "
           "add milk to my to-do list / find my resume / "
-          "which file mentions the wifi password\n")
+          "which file mentions the wifi password / "
+          "actually my wifi password changed to hunter2\n")
 
     while True:
         try:

@@ -230,6 +230,34 @@
       binary skipping, ASCII-only output, the containment guard, and the
       hallucination guards
 
+### Phase 16 — Update a remembered fact (2026-07-30)
+- [x] `update_fact` tool (`jarvis/tools/memory.py`): the 8B model can now CORRECT
+      or replace a fact it already stored, instead of piling up a second one that
+      contradicts it ("actually my wifi password changed to ...", "my meeting
+      moved to Tuesday", "update my address"). Closes the top memory item in
+      Future work — Jarvis's memory stays consistent over time, a real autonomy
+      win
+- [x] Give a few words of the existing fact (`old`) + the corrected wording
+      (`new`); the single matching fact is replaced IN PLACE (count unchanged,
+      timestamp refreshed) and the change is reflected immediately in `recall`
+      and the injected system-prompt preamble
+- [x] Safe by construction, mirroring `forget`: if several facts match `old`,
+      NOTHING changes and the matches are listed so the model can be more
+      specific; if nothing matches, the model is told to use `remember` instead;
+      if `new` duplicates a DIFFERENT existing fact, the old one is dropped
+      rather than creating a duplicate
+- [x] Hardened vs 8B hallucinations: empty `old`/`new` rejected, over-long `new`
+      truncated (bounded, reuses `MAX_FACT_LEN`), wrong-type args coerced,
+      no-op update (new == old) reported, atomic writes via the existing
+      `_save`, corrupt-store recovery inherited — never raises, never corrupts
+- [x] Agent system prompt now steers "something I told you changed/was wrong" to
+      `update_fact` rather than a second `remember`; the "Try:" line suggests
+      "actually my wifi password changed to hunter2"; all output stays ASCII
+- [x] `tests/smoke.py memory` (in the safe set) gains update_fact coverage: the
+      in-place replace happy path, no-match-points-at-remember, ambiguous
+      multi-match safety, the empty/missing/wrong-type/over-long guards, and
+      dedup-on-update
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -251,8 +279,10 @@
       voices; make Jarvis bilingual
 - [ ] Face recognition ("it's you" vs "unknown person") — opt-in
 - [ ] Watch multiple cameras at once; small live dashboard window
-- [ ] Memory next steps: let Jarvis edit/replace a fact (not just add/forget),
-      and surface remembered facts in the HUD
+- [x] Memory: let Jarvis edit/replace a fact (not just add/forget) — done in
+      Phase 16 (`update_fact`)
+- [ ] Memory next steps: surface remembered facts in the HUD; let recall/update
+      fuzzy-match wording, not just substrings
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

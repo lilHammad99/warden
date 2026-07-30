@@ -99,6 +99,51 @@ def t_memory():
         return "corrupt store recovered"
     check("memory corrupt-store recovery", corrupt_store_recovers)
 
+    # store is empty again after the corrupt-recovery step: clean slate for the
+    # update_fact tests below.
+    def update_happy_path():
+        registry.dispatch("remember", {"fact": "The wifi password is hunter2"})
+        registry.dispatch("remember", {"fact": "The user lives in Rabat"})
+        assert mem.count() == 2
+        # a single match is REPLACED in place: count unchanged, not appended
+        out = registry.dispatch("update_fact",
+                                {"old": "wifi", "new": "The wifi password is dragon99"})
+        assert "Updated" in out, out
+        assert mem.count() == 2, "update must not add a fact"
+        # recall + injected preamble reflect the new wording, not the old
+        assert "dragon99" in registry.dispatch("recall", {"query": "wifi"})
+        assert "dragon99" in mem.memory_preamble()
+        assert "hunter2" not in mem.memory_preamble()
+        # a no-match update changes nothing and points at remember
+        r = registry.dispatch("update_fact", {"old": "zzzznope", "new": "whatever"})
+        assert "Nothing in memory matches" in r and "remember" in r, r
+        assert mem.count() == 2
+        return "update single-match + no-match ok"
+    check("memory update_fact happy path", update_happy_path)
+
+    def update_guards():
+        # ambiguous 'old' matching several facts changes NOTHING (safety)
+        registry.dispatch("remember", {"fact": "The user likes green tea"})
+        registry.dispatch("remember", {"fact": "The user likes long walks"})
+        r = registry.dispatch("update_fact", {"old": "likes", "new": "one single thing"})
+        assert "please be more specific" in r, r
+        assert "one single thing" not in mem.memory_preamble(), "ambiguous update wrote anyway"
+        # empty / missing / wrong-type args must not crash or corrupt the store
+        assert "Error" in registry.dispatch("update_fact", {"old": "", "new": "x"})
+        assert "Error" in registry.dispatch("update_fact", {"old": "wifi", "new": ""})
+        assert "Error" in registry.dispatch("update_fact", {"new": "x"})   # missing old
+        registry.dispatch("update_fact", {"old": 123, "new": 456})          # coerced, no raise
+        # over-long 'new' is truncated (bounded), not stored unbounded
+        lng = registry.dispatch("update_fact", {"old": "Rabat", "new": "y" * 5000})
+        assert "shortened" in lng, lng
+        # updating to a wording that already exists as a DIFFERENT fact must not
+        # create a duplicate: the old one is dropped, one copy remains
+        registry.dispatch("update_fact",
+                          {"old": "green tea", "new": "The user likes long walks"})
+        assert mem.memory_preamble().lower().count("long walks") == 1, "duplicate created"
+        return "ambiguous-safety + guards + dedup-on-update ok"
+    check("memory update_fact guards", update_guards)
+
 
 def t_shell():
     """Exercises the safe run_command tool + its defenses. No model needed."""
