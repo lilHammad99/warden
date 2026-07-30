@@ -500,12 +500,44 @@ json", "how many records are in my export", "what fields does this data have",
   folder + missing, the JSONL scan cap, ASCII-only, and the empty/missing/
   wrong-type guards. Full safe set: 212 checks, all PASS.
 
+## 2026-07-30 — Delete a whole folder to the Recycle Bin (Phase 32)
+
+Added `recycle_folder` (`jarvis/tools/recycle.py`, alongside `recycle_file`): the
+delete member of the file family was files-only (recycle_file refuses a folder), so
+"delete that whole folder", "remove my old Projects folder", "bin the Temp folder"
+was impossible. Now Jarvis bins a whole tree the same safe, undoable way it bins a
+file -- completing the delete family and pairing with move_folder/copy_folder.
+- Sends the folder (and everything in it) to the Windows Recycle Bin (`FOF_ALLOWUNDO`)
+  by REUSING recycle_file's `_send_to_recycle_bin` (ctypes, no new dependency);
+  SHFileOperation handles a directory as-is. Still no hard-delete path.
+- Reuses `organize._resolve_under_home` for containment (a folder outside home,
+  incl. a `..`-escape, is REJECTED) and additionally refuses the **home folder
+  itself** so one hallucinated path can't bin the user's whole home. A FILE source
+  is refused and steered to recycle_file (and recycle_file now steers a folder to
+  recycle_folder), so neither tool does the other's job.
+- Bounded BEFORE any delete: `_measure_folder` pre-scans the tree (bounded on file
+  count 20000 + a 15 s wall-clock budget) and the folder is refused if it has too
+  many files or is over `MAX_RECYCLE_BYTES` (1 GB) -- Windows permanently deletes
+  items too big for the bin, so an oversized folder is left untouched. Success only
+  claimed after confirming the folder actually left; file count + total size
+  reported. Alt arg names (`folder`/`source`/`directory`/...), wrong-type/empty/
+  missing args coerced or rejected, output pure ASCII. Never raises.
+- Auto-registers via the already-present `recycle` import in `app.py`; wired into
+  the agent system prompt (recycle_folder vs recycle_file) and the console "Try:"
+  line ("delete my old projects folder").
+- `tests/smoke.py recycle` gains recycle_folder coverage (happy path with honest
+  file count + recoverable tree, empty folder, alt arg names, refuse-a-file,
+  refuse-home, containment, missing folder, size cap, file-count cap, OS-failure
+  guard, ASCII-only, empty/missing/wrong-type guards) -- via the same hermetic fake
+  bin, so it's deterministic and never touches the real Recycle Bin. Full safe set
+  all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 31 that is 56 without browser, 62 with. No tools are being silently
+after Phase 32 that is 57 without browser, 63 with. No tools are being silently
 dropped.
 
 ## How to test (in order)

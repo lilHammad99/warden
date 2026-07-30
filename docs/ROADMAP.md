@@ -806,6 +806,49 @@
       source + missing file, the JSONL scan cap, ASCII-only output, and the
       empty/missing/wrong-type guards
 
+### Phase 32 — Delete a whole folder to the Recycle Bin (2026-07-30)
+- [x] `recycle_folder` tool (`jarvis/tools/recycle.py`, alongside `recycle_file`):
+      the delete member of the file family was files-only -- `recycle_file` refuses
+      a folder -- so "delete that whole folder", "remove my old Projects folder",
+      "bin the Temp folder" was impossible. Now Jarvis can bin a whole tree the same
+      safe way it bins a file, completing the delete family and pairing with
+      move_folder/copy_folder. Closes the "recycling whole folders" item in Future
+      work
+- [x] **Never a permanent delete.** The folder (and everything in it) is sent to
+      the Windows Recycle Bin (`FOF_ALLOWUNDO`, reusing `recycle_file`'s
+      `_send_to_recycle_bin` -- ctypes, no new dependency), so the whole tree can be
+      restored. There is still no hard-delete path anywhere in the module
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      folder outside home -- including a `..`-escape, resolved and re-checked -- is
+      REJECTED, and the **home folder itself is refused**, so one hallucinated path
+      can never bin the user's entire home or anything in `C:\Windows`
+- [x] The right tool for the shape: `recycle_folder` refuses a FILE and points the
+      model at `recycle_file` (and `recycle_file` now refuses a folder and points at
+      `recycle_folder`), so neither can be tricked into the other's job
+- [x] Bounded before any delete: the tree is pre-measured (`_measure_folder`,
+      bounded on file count (20000) and a wall-clock budget) and REFUSED if it holds
+      too many files or is over the Recycle-Bin size cap (`MAX_RECYCLE_BYTES`, 1 GB)
+      -- Windows permanently deletes items too big for the bin, so an oversized
+      folder is left untouched rather than risking an un-undoable delete. Success
+      only claimed after confirming the folder actually left its place; the file
+      count + total size are reported
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`folder`/`source`/`directory`/`dir`/...), a
+      missing folder and an OS-level failure surface as friendly messages, all
+      output forced to pure ASCII -- never raises, never crashes the agent
+- [x] Auto-registers via the already-present `recycle` import in `app.py`; the
+      agent system prompt steers "delete a whole FOLDER" to `recycle_folder` (vs
+      `recycle_file` for a single file); the console "Try:" line suggests "delete my
+      old projects folder"
+- [x] `tests/smoke.py recycle` (in the safe set) gains recycle_folder coverage:
+      the happy path (whole tree binned + recoverable + honest file count), an empty
+      folder, alt arg names, refusing a file (steered to recycle_file), refusing the
+      home folder, the containment guard, the missing-folder message, the size cap
+      and file-count cap (folder kept when over cap), the OS-failure guard,
+      ASCII-only output, and the empty/missing/wrong-type guards. The real Recycle
+      Bin call stays swapped for the hermetic fake, so the test is deterministic and
+      never touches the user's real bin
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -853,9 +896,10 @@
       home-contained, never overwrites/merges, never copies a folder into its own
       subfolder, depth-capped, pre-measured + bounded on size/count (500 MB / 5000
       files), file source points at copy_file
-- [ ] File management next: recycling whole folders with recycle_file (needs the
-      same care as files-only today, i.e. an undoable Recycle-Bin send that
-      refuses the home folder and is size/count aware)
+- [x] File management: recycling whole folders -- done in Phase 32
+      (`recycle_folder`); an undoable Recycle-Bin send that refuses the home folder,
+      steers a file source to recycle_file, and is size/count aware (pre-measured,
+      1 GB / 20000-file caps, refused before any delete)
 - [x] Disk-usage next: an `open_folder` tool (reveal a folder in Explorer) so
       after folder_size flags a heavy folder the user can jump straight to it --
       done in Phase 25 (`open_folder`); read-only, home-contained, reveals a file

@@ -115,8 +115,12 @@ Rules:
   and leaves the archive in place. To delete or throw away a file the user is
   done with ("delete that draft", "remove the old screenshot", "bin my notes"),
   call recycle_file with path (the file); it goes to the Recycle Bin, so it is a
-  safe, undoable delete -- there is no permanent-delete tool, and it only takes a
-  single file, never a whole folder. To check how much disk space something is
+  safe, undoable delete -- there is no permanent-delete tool. recycle_file takes a
+  single file; to delete a WHOLE folder and everything in it ("delete that whole
+  folder", "remove my old Projects folder"), call recycle_folder with path (the
+  folder) instead -- it too is a safe, undoable Recycle Bin delete, never touches
+  the home folder itself, and refuses a folder that is too big to bin. To check
+  how much disk space something is
   using, or what is taking up room ("how big is my Downloads folder", "what's
   taking up space in Documents"), call folder_size with an optional folder; it is
   read-only and reports the total size, the file count, and the biggest items

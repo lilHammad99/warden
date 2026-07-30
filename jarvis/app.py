@@ -144,6 +144,7 @@ def main():
           "open my downloads folder / "
           "back up my documents into a zip / unzip my backup / "
           "delete that old draft to the recycle bin / "
+          "delete my old projects folder / "
           "actually my wifi password changed to hunter2\n")
 
     while True:

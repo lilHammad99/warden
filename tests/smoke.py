@@ -1748,6 +1748,7 @@ def t_recycle():
 
     saved_recycler = rec._send_to_recycle_bin
     saved_cap = rec.MAX_RECYCLE_BYTES
+    saved_files = rec.MAX_RECYCLE_FILES
     rec._send_to_recycle_bin = fake_recycle
     try:
         def happy_path():
@@ -1781,9 +1782,9 @@ def t_recycle():
 
         def refuses_directory():
             r = registry.dispatch("recycle_file", {"path": "jarvis_recycle_smoke/sub"})
-            assert "folder" in r and "whole folders" in r, r
+            assert "folder" in r and "recycle_folder" in r, r
             assert (sandbox / "sub").exists(), "folder was binned!"
-            return "a folder is refused"
+            return "a folder is refused (steered to recycle_folder)"
         check("recycle refuses directory", refuses_directory)
 
         def missing_source_is_friendly():
@@ -1837,9 +1838,125 @@ def t_recycle():
             registry.dispatch("recycle_file", {"path": {}})
             return "guards held"
         check("recycle hallucination guards", hallucination_guards)
+
+        # ---- recycle_folder (send a whole folder to the bin) --------------
+        def folder_happy_path():
+            mk("proj/notes.txt", "hi")
+            mk("proj/sub/deep.txt", "there")
+            out = registry.dispatch("recycle_folder",
+                {"path": "jarvis_recycle_smoke/proj"})
+            assert "Recycle Bin" in out and "restore" in out, out
+            assert "2 files" in out, out                 # honest file count
+            # the folder left its place...
+            assert not (sandbox / "proj").exists(), "folder not removed"
+            # ...and the whole tree is recoverable in our fake bin
+            assert (trash / "proj" / "sub" / "deep.txt").exists(), "not recoverable"
+            return "sent a whole folder to the (fake) bin, recoverable"
+        check("recycle_folder happy path", folder_happy_path)
+
+        def folder_empty_ok():
+            (sandbox / "emptydir").mkdir(exist_ok=True)
+            out = registry.dispatch("recycle_folder",
+                {"path": "jarvis_recycle_smoke/emptydir"})
+            assert "Recycle Bin" in out and "empty" in out, out
+            assert not (sandbox / "emptydir").exists()
+            return "an empty folder is binned (reported empty)"
+        check("recycle_folder empty folder", folder_empty_ok)
+
+        def folder_alt_arg_names():
+            mk("altdir/a.txt")
+            out = registry.dispatch("recycle_folder",
+                {"folder": "jarvis_recycle_smoke/altdir"})
+            assert "Recycle Bin" in out, out
+            assert not (sandbox / "altdir").exists()
+            return "alt folder/source arg names handled"
+        check("recycle_folder alt arg names", folder_alt_arg_names)
+
+        def folder_refuses_file():
+            # pointed at a FILE it must refuse and steer to recycle_file
+            mk("single.txt")
+            r = registry.dispatch("recycle_folder",
+                {"path": "jarvis_recycle_smoke/single.txt"})
+            assert "file" in r and "recycle_file" in r, r
+            assert (sandbox / "single.txt").exists(), "file was binned!"
+            return "a file is refused (steered to recycle_file)"
+        check("recycle_folder refuses a file", folder_refuses_file)
+
+        def folder_refuses_home():
+            # a path resolving to the home folder itself must be refused
+            r = registry.dispatch("recycle_folder", {"path": "~"})
+            assert "home folder" in r and "won't" in r, r
+            return "the home folder is never binned"
+        check("recycle_folder refuses home", folder_refuses_home)
+
+        def folder_containment_guard():
+            r = registry.dispatch("recycle_folder", {"path": "C:\\Windows"})
+            assert "only work inside your own folders" in r, r
+            return "escape outside home blocked"
+        check("recycle_folder containment guard", folder_containment_guard)
+
+        def folder_missing_source():
+            r = registry.dispatch("recycle_folder",
+                {"path": "jarvis_recycle_smoke/ghostdir"})
+            assert "can't find" in r, r
+            return "missing folder is a friendly message"
+        check("recycle_folder missing source", folder_missing_source)
+
+        def folder_size_cap():
+            rec.MAX_RECYCLE_BYTES = 4               # temporarily tiny
+            mk("bigdir/data.txt", "0123456789")     # 10 bytes > 4
+            r = registry.dispatch("recycle_folder",
+                {"path": "jarvis_recycle_smoke/bigdir"})
+            assert "too large" in r, r
+            assert (sandbox / "bigdir").exists(), "oversized folder was binned"
+            rec.MAX_RECYCLE_BYTES = saved_cap
+            return "oversized folder refused, folder kept"
+        check("recycle_folder size cap", folder_size_cap)
+
+        def folder_count_cap():
+            rec.MAX_RECYCLE_FILES = 1               # temporarily tiny
+            mk("manydir/a.txt"); mk("manydir/b.txt")
+            r = registry.dispatch("recycle_folder",
+                {"path": "jarvis_recycle_smoke/manydir"})
+            assert "too many files" in r, r
+            assert (sandbox / "manydir").exists(), "folder over count cap binned"
+            rec.MAX_RECYCLE_FILES = saved_files
+            return "over-count folder refused, folder kept"
+        check("recycle_folder file-count cap", folder_count_cap)
+
+        def folder_failure_is_friendly():
+            def boom(path):
+                raise OSError("bin unavailable")
+            rec._send_to_recycle_bin = boom
+            mk("staydir/x.txt")
+            r = registry.dispatch("recycle_folder",
+                {"path": "jarvis_recycle_smoke/staydir"})
+            assert "couldn't delete it" in r, r
+            assert (sandbox / "staydir").exists(), "folder vanished despite failure"
+            rec._send_to_recycle_bin = fake_recycle
+            return "OS failure surfaced, folder kept"
+        check("recycle_folder os-failure guard", folder_failure_is_friendly)
+
+        def folder_output_is_ascii():
+            mk("ascdir/y.txt")
+            registry.dispatch("recycle_folder",
+                {"path": "jarvis_recycle_smoke/ascdir"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("recycle_folder ascii-only output", folder_output_is_ascii)
+
+        def folder_hallucination_guards():
+            assert "Error" in registry.dispatch("recycle_folder", {"path": ""})
+            assert "Error" in registry.dispatch("recycle_folder", {"path": "   "})
+            assert "Error" in registry.dispatch("recycle_folder", {})
+            registry.dispatch("recycle_folder", {"path": 123})
+            registry.dispatch("recycle_folder", {"path": ["a"]})
+            registry.dispatch("recycle_folder", {"path": {}})
+            return "guards held"
+        check("recycle_folder hallucination guards", folder_hallucination_guards)
     finally:
         rec._send_to_recycle_bin = saved_recycler
         rec.MAX_RECYCLE_BYTES = saved_cap
+        rec.MAX_RECYCLE_FILES = saved_files
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
