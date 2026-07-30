@@ -5,4 +5,7 @@ data/snapshots/
 data/memory.json
 data/memory.tmp
 data/memory.corrupt.json
+data/tasks.json
+data/tasks.tmp
+data/tasks.corrupt.json
 yolov8n.pt

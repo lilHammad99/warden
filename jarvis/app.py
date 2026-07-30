@@ -33,6 +33,7 @@ def main():
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
     from .tools import shell  # noqa: F401
+    from .tools import tasks as task_list  # noqa: F401
     from .tools import registry
     try:
         from .tools import browser  # noqa: F401
@@ -67,13 +68,19 @@ def main():
 
     n_mem = memory_store.count()
     mem_status = f"{n_mem} fact{'s' if n_mem != 1 else ''} remembered" if n_mem else "empty"
+    n_todo = task_list.open_count()
+    todo_status = f"{n_todo} open task{'s' if n_todo != 1 else ''}" if n_todo else "clear"
     print(BANNER)
     print(f"model: {cfg['models']['chat']} | vision: {cfg['models']['vision']}"
           f" | voice: {voice_status} | browser tools: {'on' if browser_ok else 'off'}")
-    print(f"memory: {mem_status}  ({len(registry.specs())} tools online)")
+    print(f"memory: {mem_status} | to-do: {todo_status}"
+          f"  ({len(registry.specs())} tools online)")
     print(_greeting())
-    print("Type your command ('exit' to quit). Try: start working / find my "
-          "resume / read my clipboard / what do you see\n")
+    if n_todo:
+        print(f"Reminder: you have {n_todo} thing{'s' if n_todo != 1 else ''} "
+              "on your to-do list. Say 'what's on my list' to hear it.")
+    print("Type your command ('exit' to quit). Try: add milk to my to-do list / "
+          "start working / find my resume / what do you see\n")
 
     while True:
         try:

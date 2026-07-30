@@ -11,6 +11,7 @@ import ollama
 
 from .config import DESKTOP, HOME
 from .tools import memory as memory_store
+from .tools import tasks as task_list
 from .tools import registry
 
 SYSTEM_PROMPT = f"""You are Jarvis, a local AI assistant running on the user's Windows PC,
@@ -35,6 +36,10 @@ Rules:
 - For questions about this PC's network or running programs (IP address,
   whether the internet is up, what's running), use run_command with a safe
   command like ipconfig, ping, or tasklist.
+- To-do list: when the user asks to add/track something to do ("remind me to",
+  "add ... to my list", "I need to"), call add_task. To show it call
+  list_tasks; to check something off call complete_task; to delete call
+  remove_task. Anything under "The user's current to-do list" below is open.
 """
 
 MAX_TOOL_ROUNDS = 8
@@ -70,6 +75,10 @@ class Agent:
             preamble = memory_store.memory_preamble()
         except Exception:
             preamble = ""
+        try:
+            preamble += task_list.tasks_preamble()
+        except Exception:
+            pass
         self.messages[0] = {"role": "system", "content": SYSTEM_PROMPT + preamble}
 
     def chat(self, user_text: str, status=lambda s: None) -> str:

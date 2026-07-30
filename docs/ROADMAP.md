@@ -88,6 +88,25 @@
       hallucination guards, and bounded reads; saves/restores the real
       clipboard so the test is non-invasive
 
+### Phase 10 — To-do list (2026-07-30)
+- [x] `add_task` / `list_tasks` / `complete_task` / `remove_task` tools
+      (`jarvis/tools/tasks.py`): the 8B model can track what the user has to do
+      ("add milk to my list", "what do I have to do?", "mark the milk one done")
+      and it persists across restarts in `data/tasks.json` (gitignored)
+- [x] Open tasks are injected into the agent's system prompt each turn, so
+      Jarvis is aware of them and can bring them up — a real autonomy win
+- [x] `complete_task` / `remove_task` accept either a few identifying words OR
+      the number shown by `list_tasks`; if several tasks match, nothing changes
+      and the matches are listed (no accidental completion/deletion)
+- [x] Hardened vs 8B hallucinations: empty/oversized/wrong-type args rejected,
+      coerced, or bounded; dedup of open tasks; 200-task cap; atomic writes;
+      corrupt-file recovery; out-of-range numbers answered, never crash
+- [x] Startup now shows the open-task count and a one-line reminder when the
+      list isn't empty; all console output stays pure ASCII
+- [x] `tests/smoke.py tasks` (in the safe set) covers add/list/complete/remove,
+      dedup, number-vs-text selection, the hallucination guards, and
+      corrupt-store recovery
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.

@@ -1,5 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
-Sections: imports, tools, agent, camera, vision, tts, all (default: safe set)
+Sections: imports, tools, memory, shell, find, clipboard, tasks, agent,
+camera, vision, tts, hud, watch, e2e, all (default: safe set)
 """
 
 import sys
@@ -22,7 +23,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, camera, clipboard, files, find, memory, registry, shell, system, web  # noqa
+        from jarvis.tools import apps, browser, camera, clipboard, files, find, memory, registry, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -261,6 +262,88 @@ def t_clipboard():
             clip._write_clipboard_text(saved_text)
 
 
+def t_tasks():
+    """Exercises the to-do list tools + their defenses against 8B
+    hallucinations. No model needed, so it lives in the safe set."""
+    from jarvis.tools import tasks as tk
+    from jarvis.tools import registry
+
+    # isolate: use a temp store so we never touch the user's real to-do list
+    import tempfile, os, pathlib
+    tk._STORE = pathlib.Path(tempfile.gettempdir()) / "jarvis_tasks_smoke.json"
+    for p in (tk._STORE, tk._STORE.with_name("tasks.corrupt.json")):
+        if p.exists():
+            os.remove(p)
+
+    def happy_path():
+        assert "Added" in registry.dispatch("add_task", {"task": "buy milk"})
+        assert "Added" in registry.dispatch("add_task", {"task": "call the plumber"})
+        assert tk.open_count() == 2
+        out = registry.dispatch("list_tasks", {})
+        assert "buy milk" in out and "call the plumber" in out, out
+        # open tasks show up in the injected preamble
+        assert "buy milk" in tk.tasks_preamble()
+        return "add/list/preamble ok"
+    check("tasks happy path", happy_path)
+
+    def dedup():
+        registry.dispatch("add_task", {"task": "buy milk"})
+        return f"count still {tk.open_count()} (deduped)" if tk.open_count() == 2 \
+            else (_ for _ in ()).throw(AssertionError("duplicate stored"))
+    check("tasks dedup", dedup)
+
+    def complete_flow():
+        # by substring
+        assert "Marked done" in registry.dispatch("complete_task", {"task": "milk"})
+        assert tk.open_count() == 1
+        # completed one no longer counts as open, shows under done
+        done = registry.dispatch("list_tasks", {"which": "done"})
+        assert "buy milk" in done and "[x]" in done, done
+        # by number (1-based, against the open list)
+        assert "Marked done" in registry.dispatch("complete_task", {"task": "1"})
+        assert tk.open_count() == 0
+        assert "all clear" in registry.dispatch("list_tasks", {})
+        return "complete by text + number ok"
+    check("tasks complete", complete_flow)
+
+    def hallucination_guards():
+        # empty / whitespace / wrong-type args must NOT crash or store junk
+        assert "Error" in registry.dispatch("add_task", {"task": "   "})
+        assert "Error" in registry.dispatch("add_task", {"task": ""})
+        assert registry.dispatch("add_task", {}).startswith(("Error", "Added", "That is"))
+        assert "Error" in registry.dispatch("complete_task", {"task": ""})
+        assert "Error" in registry.dispatch("remove_task", {"task": ""})
+        # wrong types must not raise
+        registry.dispatch("add_task", {"task": 123})
+        registry.dispatch("list_tasks", {"which": 5})
+        # over-long task is truncated, not rejected or unbounded
+        long = registry.dispatch("add_task", {"task": "x" * 5000})
+        assert "shortened" in long, long
+        # a bad number is a friendly message, not a crash
+        assert "no task number" in registry.dispatch("complete_task", {"task": "999"})
+        return f"guards held, open={tk.open_count()}"
+    check("tasks hallucination guards", hallucination_guards)
+
+    def remove_flow():
+        # add a known removable task, then delete it by substring
+        registry.dispatch("add_task", {"task": "return library book"})
+        before = tk.open_count()
+        assert "Removed" in registry.dispatch("remove_task", {"task": "library"})
+        assert tk.open_count() == before - 1
+        # a no-match delete is a friendly message, not a crash
+        assert "Nothing" in registry.dispatch("remove_task", {"task": "zzzznope"})
+        return "remove ok"
+    check("tasks remove", remove_flow)
+
+    def corrupt_store_recovers():
+        tk._STORE.write_text("{ not valid json ", encoding="utf-8")
+        # _load must not raise; corrupt file set aside, store treated as empty
+        assert tk.open_count() == 0
+        assert tk._STORE.with_name("tasks.corrupt.json").exists()
+        return "corrupt store recovered"
+    check("tasks corrupt-store recovery", corrupt_store_recovers)
+
+
 def t_agent():
     from jarvis import config as c
     from jarvis.agent import Agent
@@ -361,8 +444,9 @@ def t_e2e():
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "clipboard": t_clipboard,
-            "agent": t_agent, "camera": t_camera, "vision": t_vision,
-            "tts": t_tts, "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
+            "tasks": t_tasks, "agent": t_agent, "camera": t_camera,
+            "vision": t_vision, "tts": t_tts, "hud": t_hud, "watch": t_watch,
+            "e2e": t_e2e}
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "safe"
@@ -371,6 +455,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_clipboard()
+        t_tasks()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")
