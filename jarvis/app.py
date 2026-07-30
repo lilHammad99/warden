@@ -44,6 +44,7 @@ def main():
     from .tools import explorer  # noqa: F401
     from .tools import extract  # noqa: F401
     from .tools import find  # noqa: F401
+    from .tools import jsondata  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
     from .tools import organize  # noqa: F401
     from .tools import recent  # noqa: F401
@@ -132,6 +133,7 @@ def main():
           "how many days until christmas / add milk to my to-do list / "
           "how many words is my essay.txt / "
           "how many rows are in my data.csv / "
+          "what's in my export.json / "
           "find my resume / read my resume.docx / "
           "which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "

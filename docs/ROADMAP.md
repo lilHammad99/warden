@@ -763,6 +763,49 @@
       file, the row-scan cap (stops early), ASCII-only output, and the
       empty/missing/wrong-type guards
 
+### Phase 31 — Read / summarise JSON & JSON Lines data files (2026-07-30)
+- [x] `read_json` tool (`jarvis/tools/jsondata.py`): the next member of the
+      structured-data family after Phase 30's `read_csv`. `read_file` only dumps a
+      JSON file's raw text and the 8B model is unreliable at eyeballing a wall of
+      braces, so Jarvis now parses a JSON file properly and reports its SHAPE
+      exactly: the top-level structure (an object with N fields, an array of N
+      items, or a single value), the field names and their value types, and a
+      short bounded preview ("what's in this json", "how many records are in my
+      export", "what fields does this data have", "summarise this json") -- an
+      accuracy/autonomy win and the natural partner to `find_files` (locate the
+      file, then read it)
+- [x] Pure standard library (`json`): JSON is text, so NO new dependency. Give
+      `path` (locate it first with find_files if unknown). Line-delimited JSON
+      (`.jsonl` / `.ndjson`, one record per line -- common for exports and logs)
+      is understood too, and is even detected when a `.json` file turns out to be
+      line-delimited
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      path outside home -- including a `..`-escape -- is REJECTED, so it can never
+      read a data file from `C:\Windows`
+- [x] Bounded everywhere: the file on disk is capped before reading (25 MB), the
+      JSONL scan is capped (200k lines, stops early with a note), only so many
+      field names are listed (40), and the preview is capped in both characters
+      (1200) and lines (30) -- a giant or hostile file can't exhaust memory or
+      flood the agent's context. A pathologically deep structure that would
+      overflow the parser (`RecursionError`) is caught and reported, not crashed on
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`file`/`document`/`source`/`json`/...), a
+      binary/Excel/PDF/image file (by extension) or a NUL-byte file is refused,
+      invalid JSON, a folder source and a missing file surface as friendly
+      messages, output forced to pure ASCII -- never raises, never changes anything
+      (read-only)
+- [x] Auto-registers via a new `jsondata` import in `app.py`; the agent system
+      prompt steers "what's in / how many records / what fields / summarise this
+      JSON" to `read_json`; the console "Try:" line suggests "what's in my
+      export.json"
+- [x] `tests/smoke.py jsondata` (in the safe set) covers summarising an object
+      (fields + types + preview), an array of objects, an array of scalars, a
+      top-level scalar, a `.jsonl` file (blank line skipped), the JSONL fallback
+      for a line-delimited `.json`, an empty file, invalid JSON, the deep-nesting
+      guard, refusing binary + NUL-byte files, the containment guard, a folder
+      source + missing file, the JSONL scan cap, ASCII-only output, and the
+      empty/missing/wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -828,10 +871,18 @@
       (`read_csv`); pure stdlib (no dep), exact row/column counts + column names +
       a preview, delimiter sniffed, home-contained, bounded (file size / row scan /
       field size / cell truncation), Excel steered to CSV, ASCII-only
+- [x] Structured data: read / summarise a JSON or JSON Lines data file -- done in
+      Phase 31 (`read_json`); pure stdlib (no dep), reports the structure (object
+      with N fields / array of N items / scalar), field names + value types and a
+      bounded preview, understands `.jsonl`/`.ndjson` (and detects line-delimited
+      `.json`), home-contained, bounded (file size / JSONL scan / keys listed /
+      preview chars+lines / deep-nesting), ASCII-only
 - [ ] Structured data next: an Excel `.xlsx` reader (needs a dependency like
       openpyxl, which is NOT currently installed) so "how many rows in my
       workbook.xlsx" / "read sheet 2" works; read_csv already tells the user to
-      save as CSV. Same home-contained + bounded + ASCII care as read_csv
+      save as CSV. Same home-contained + bounded + ASCII care as read_csv. A
+      deeper JSON win (query a nested value by key path, e.g. 'get models.chat')
+      could follow read_json too
 - [ ] Document reading next: a PDF reader (needs a dependency like pypdf, which is
       NOT currently installed) so "read my resume.pdf"/"summarise this PDF" works;
       read_document already tells the user PDFs aren't supported yet. Same

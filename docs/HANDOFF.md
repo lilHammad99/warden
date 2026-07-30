@@ -467,12 +467,45 @@ Natural partner to `find_files` (locate, then read).
   refusal, containment, folder + missing, the row-scan cap, ASCII-only, and the
   empty/missing/wrong-type guards. Full safe set: 197 checks, all PASS.
 
+## 2026-07-30 — Read / summarise JSON & JSON Lines data files (Phase 31)
+
+Added `read_json` (`jarvis/tools/jsondata.py`): the next member of the
+structured-data family after Phase 30's `read_csv`. `read_file` only dumps a JSON
+file's raw text and the 8B model is unreliable at eyeballing nested braces, so
+Jarvis can now PARSE a JSON file and report its shape exactly ("what's in this
+json", "how many records are in my export", "what fields does this data have",
+"summarise this json").
+- Pure stdlib (`json`), NO new dependency. Reports the top-level structure
+  (object with N fields / array of N items / a single scalar), the field names
+  with their value types, and a bounded preview. Understands line-delimited JSON
+  (`.jsonl`/`.ndjson`) AND detects it when a `.json` file is actually
+  line-delimited.
+- Reuses `organize._resolve_under_home` for containment (a path outside home,
+  incl. a `..`-escape, is REJECTED -> can't read `C:\Windows`). Bounded: file on
+  disk 25 MB, JSONL scan 200k lines (stops early with a note), 40 field names
+  listed, preview capped to 1200 chars / 30 lines. A too-deep structure raises
+  `RecursionError` in the parser -- caught and reported, never crashes.
+- Forgiving to 8B quirks: alt arg names (`file`/`document`/`source`/`json`/...),
+  wrong-type/empty/missing `path` coerced or rejected, a binary/Excel/PDF/image
+  file (by extension) or a NUL-byte file refused, invalid JSON / folder / missing
+  file -> friendly messages, output pure ASCII (field names + preview forced to
+  ASCII). Read-only; never raises.
+- Wired into `app.py` imports (`from .tools import jsondata`) + the console "Try:"
+  line ("what's in my export.json"), and the agent system prompt (read_json for a
+  .json/.jsonl file, after the read_csv bullet).
+- `tests/smoke.py jsondata` (safe set): summarise an object (fields/types/preview),
+  an array of objects, an array of scalars, a top-level scalar, a `.jsonl` (blank
+  line skipped), the JSONL fallback for a line-delimited `.json`, empty file,
+  invalid JSON, the deep-nesting guard, binary + NUL-byte refusal, containment,
+  folder + missing, the JSONL scan cap, ASCII-only, and the empty/missing/
+  wrong-type guards. Full safe set: 212 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 30 that is 55 without browser, 61 with. No tools are being silently
+after Phase 31 that is 56 without browser, 62 with. No tools are being silently
 dropped.
 
 ## How to test (in order)

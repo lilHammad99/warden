@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
-dates, convert, textstats, spreadsheet, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+dates, convert, textstats, spreadsheet, jsondata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
 """
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, explorer, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, explorer, extract, files, find, jsondata, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -2732,6 +2732,165 @@ def t_spreadsheet():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def t_jsondata():
+    """Exercises the read_json tool (summarise a JSON / JSON Lines data file:
+    structure, field names + types, preview) + its defenses against 8B
+    hallucinations. Builds a temp tree inside the user's home; deterministic,
+    needs no model, lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import jsondata as jd  # noqa: F401  (register read_json)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_json_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    (sandbox / "config.json").write_text(
+        '{"name": "Jarvis", "version": 2, "enabled": true, '
+        '"models": {"chat": "qwen3:8b"}}', encoding="utf-8")
+    (sandbox / "people.json").write_text(
+        '[{"id": 1, "name": "Ann"}, {"id": 2, "name": "Bob"}, '
+        '{"id": 3, "name": "Cy"}]', encoding="utf-8")
+    (sandbox / "nums.json").write_text("[1, 2, 3, 4, 5, 6, 7]", encoding="utf-8")
+    (sandbox / "scalar.json").write_text('"just a string"', encoding="utf-8")
+    (sandbox / "log.jsonl").write_text(
+        '{"evt": "a", "n": 1}\n{"evt": "b", "n": 2}\n\n{"evt": "c", "n": 3}\n',
+        encoding="utf-8")
+    (sandbox / "sneaky.json").write_text(          # jsonl content, .json ext
+        '{"a": 1}\n{"a": 2}\n{"a": 3}\n', encoding="utf-8")
+    (sandbox / "accent.json").write_text(
+        '{"city": "zürich", "name": "résumé"}', encoding="utf-8")
+    (sandbox / "empty.json").write_text("", encoding="utf-8")
+    (sandbox / "broken.json").write_text('{"a": 1, ', encoding="utf-8")
+    (sandbox / "deep.json").write_text("[" * 2000 + "]" * 2000, encoding="utf-8")
+    (sandbox / "pic.png").write_bytes(b"\x89PNG not really")
+    (sandbox / "blob.json").write_bytes(b'{"a":\x00}')     # NUL -> not text
+
+    saved_jsonl = jd.MAX_JSONL_ROWS
+    try:
+        def happy_object():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/config.json"})
+            assert "config.json" in out, out
+            assert "object with 4 fields" in out, out
+            assert "name (text)" in out and "version (number)" in out, out
+            assert "enabled (true/false)" in out and "models (object)" in out, out
+            assert "Preview:" in out and "qwen3:8b" in out, out
+            return "summarised a JSON object (fields + types + preview)"
+        check("read_json summarises an object", happy_object)
+
+        def happy_array():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/people.json"})
+            assert "array of 3 items" in out, out
+            assert "items are objects" in out, out
+            assert "id (number)" in out and "name (text)" in out, out
+            return "summarised an array of objects"
+        check("read_json summarises an array of objects", happy_array)
+
+        def scalar_array():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/nums.json"})
+            assert "array of 7 items" in out, out
+            assert "first item is a number" in out, out
+            return "array of scalars reports the item type"
+        check("read_json array of scalars", scalar_array)
+
+        def top_scalar():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/scalar.json"})
+            assert "single text value" in out and "just a string" in out, out
+            return "top-level scalar summarised"
+        check("read_json top-level scalar", top_scalar)
+
+        def jsonl_file():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/log.jsonl"})
+            assert "JSON Lines with 3 records" in out, out    # blank line ignored
+            assert "evt (text)" in out and "n (number)" in out, out
+            return "read a .jsonl file (blank line skipped)"
+        check("read_json reads JSON Lines", jsonl_file)
+
+        def jsonl_without_ext():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/sneaky.json"})
+            assert "JSON Lines with 3 records" in out, out    # .json but line-delimited
+            return "line-delimited JSON detected without the extension"
+        check("read_json JSONL fallback", jsonl_without_ext)
+
+        def empty_file():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/empty.json"})
+            assert "empty" in out, out
+            return "empty file is a friendly message"
+        check("read_json empty file", empty_file)
+
+        def broken_json():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/broken.json"})
+            assert "isn't valid JSON" in out, out
+            return "invalid JSON is a friendly message"
+        check("read_json invalid JSON", broken_json)
+
+        def deep_json():
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/deep.json"})
+            # either the parser refuses the deep nest or it summarises -- never raises
+            assert isinstance(out, str) and out, out
+            out.encode("ascii")
+            return "deeply nested JSON handled without crashing"
+        check("read_json deep-nesting guard", deep_json)
+
+        def refuses_binary():
+            png = registry.dispatch("read_json", {"path": "jarvis_json_smoke/pic.png"})
+            assert "isn't a JSON text file" in png, png
+            nul = registry.dispatch("read_json", {"path": "jarvis_json_smoke/blob.json"})
+            assert "doesn't look like a text file" in nul, nul
+            return "binary ext steered + NUL-byte file refused"
+        check("read_json refuses non-text files", refuses_binary)
+
+        def containment_guard():
+            r = registry.dispatch("read_json", {"path": "C:\\Windows\\win.ini"})
+            assert "only work inside your own folders" in r, r
+            return "escape outside home blocked"
+        check("read_json containment guard", containment_guard)
+
+        def folder_and_missing():
+            fol = registry.dispatch("read_json", {"path": "jarvis_json_smoke"})
+            assert "is a folder" in fol, fol
+            miss = registry.dispatch("read_json", {"path": "jarvis_json_smoke/ghost.json"})
+            assert "can't find" in miss, miss
+            return "folder source + missing file are friendly messages"
+        check("read_json folder + missing", folder_and_missing)
+
+        def jsonl_scan_cap():
+            jd.MAX_JSONL_ROWS = 2
+            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/log.jsonl"})
+            jd.MAX_JSONL_ROWS = saved_jsonl
+            assert "stopped early" in out, out
+            return "a huge JSONL file stops early with a note"
+        check("read_json JSONL scan cap", jsonl_scan_cap)
+
+        def output_is_ascii():
+            registry.dispatch(
+                "read_json", {"path": "jarvis_json_smoke/accent.json"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("read_json ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            assert "Error" in registry.dispatch("read_json", {})
+            assert "Error" in registry.dispatch("read_json", {"path": ""})
+            assert "Error" in registry.dispatch("read_json", {"path": "   "})
+            # wrong types must not raise
+            registry.dispatch("read_json", {"path": 123})
+            registry.dispatch("read_json", {"path": ["a"]})
+            registry.dispatch("read_json", {"path": {}})
+            registry.dispatch("read_json", {"path": None})
+            # an unexpected extra arg is dropped, the call still succeeds; alt name
+            out = registry.dispatch(
+                "read_json", {"file": "jarvis_json_smoke/config.json", "reason": "curious"})
+            assert "object with 4 fields" in out, out
+            return "guards held"
+        check("read_json hallucination guards", hallucination_guards)
+    finally:
+        jd.MAX_JSONL_ROWS = saved_jsonl
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
@@ -2742,7 +2901,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert, "textstats": t_textstats,
-            "spreadsheet": t_spreadsheet,
+            "spreadsheet": t_spreadsheet, "jsondata": t_jsondata,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
@@ -2759,7 +2918,7 @@ if __name__ == "__main__":
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()
-        t_spreadsheet()
+        t_spreadsheet(); t_jsondata()
         t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

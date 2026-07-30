@@ -58,6 +58,13 @@ Rules:
   where read_file only dumps raw text. Find the file with find_files first if you
   don't have its path. Excel .xlsx is not supported yet (ask the user to save as
   CSV).
+- JSON data files: for ANY question about a .json (or .jsonl) file -- what is in
+  it, how many records or items it has, what fields/keys the data has, or to
+  summarise it ("what's in this json", "how many records are in my export", "what
+  fields does this data have") -- call read_json with path; it parses the file
+  and reports its structure exactly, where read_file only dumps raw text and your
+  own reading of nested JSON is unreliable. Find the file with find_files first if
+  you don't have its path.
 - Unit conversions: for ANY "convert X to Y" (miles to km, C to F, kg to lb,
   cups to ml, mph to km/h, GB to MB, etc.), call convert_units with value,
   from_unit and to_unit instead of guessing; it is always exact.
