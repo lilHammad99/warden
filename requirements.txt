@@ -14,3 +14,4 @@ faster-whisper
 openwakeword
 ultralytics
 playwright
+pypdf

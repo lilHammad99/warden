@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
+movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, textstats, spreadsheet, jsondata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, explorer, extract, fileinfo, files, find, jsondata, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, explorer, extract, fileinfo, files, find, jsondata, memory, organize, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -1717,6 +1717,196 @@ def t_document():
             assert "budget report" in out, out
             return "guards held"
         check("read_document hallucination guards", hallucination_guards)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def _make_pdf(path, lines):
+    """Build a minimal but VALID single-page PDF containing the given text lines,
+    with correct object offsets in the xref -- no writer dependency needed, so
+    the pdf test can construct its own fixtures. pypdf reads what this writes."""
+    content_lines = []
+    y = 720
+    for ln in lines:
+        esc = ln.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        content_lines.append(f"BT /F1 12 Tf 72 {y} Td ({esc}) Tj ET")
+        y -= 20
+    # cp1252 (Windows-1252) so curly quotes / em-dash / accents survive as the
+    # single bytes WinAnsiEncoding maps back to Unicode -- exactly how a real PDF
+    # stores them, which is what exercises read_pdf's ASCII transliteration.
+    content = "\n".join(content_lines).encode("cp1252")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+         b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"),
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+        (b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+         b"/Encoding /WinAnsiEncoding >>"),
+    ]
+    buf = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(buf))
+        buf += b"%d 0 obj\n" % i + obj + b"\nendobj\n"
+    xref_off = len(buf)
+    n = len(objects) + 1
+    buf += b"xref\n0 %d\n" % n
+    buf += b"0000000000 65535 f \n"
+    for off in offsets:
+        buf += b"%010d 00000 n \n" % off
+    buf += b"trailer\n<< /Size %d /Root 1 0 R >>\n" % n
+    buf += b"startxref\n%d\n%%%%EOF" % xref_off
+    path.write_bytes(bytes(buf))
+
+
+def t_pdf():
+    """Exercises the read_pdf tool (read a PDF's text) + its defenses against 8B
+    hallucinations. Builds a real minimal PDF inside a temp tree in the user's
+    home, so it is deterministic and needs no model. The checks that actually
+    parse a PDF are GUARDED behind pypdf being importable, so the safe set passes
+    cleanly whether or not the optional dependency is installed; the containment/
+    type/missing/wrong-type guards and the graceful missing-dependency message
+    are always exercised."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import pdf  # noqa: F401  (register read_pdf)
+    from jarvis.tools import registry
+
+    have_pypdf = pdf._import_pypdf() is not None
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_pdf_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    _make_pdf(sandbox / "report.pdf",
+              ["Hello sir, this is the budget report.",
+               "Total is “1200” euros — for the café."])
+    # a page with no text draws nothing -> should read as "no readable text"
+    _make_pdf(sandbox / "blank.pdf", [])
+
+    try:
+        if have_pypdf:
+            def happy():
+                out = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/report.pdf"})
+                assert "Hello sir, this is the budget report." in out, out
+                assert "report.pdf" in out and "page" in out, out  # header
+                return "pdf text extracted"
+            check("read_pdf reads a .pdf", happy)
+
+            def ascii_only():
+                out = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/report.pdf"})
+                out.encode("ascii")  # pure ASCII or this raises
+                assert '"1200"' in out, out       # curly quotes -> straight
+                assert "cafe" in out, out          # accent stripped, not 'caf?'
+                assert "—" not in out and "?" not in out, out
+                return "curly quotes/dash/accent -> clean ASCII"
+            check("read_pdf ascii-only output", ascii_only)
+
+            def scanned_no_text():
+                out = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/blank.pdf"})
+                assert "no readable text" in out, out
+                return "image-only/empty pdf -> friendly message"
+            check("read_pdf no-text pdf", scanned_no_text)
+
+            def alt_arg_names():
+                out = registry.dispatch("read_pdf", {"file": "jarvis_pdf_smoke/report.pdf"})
+                assert "budget report" in out, out
+                out2 = registry.dispatch("read_pdf", {"document": "jarvis_pdf_smoke/report.pdf"})
+                assert "budget report" in out2, out2
+                return "alt file/document arg names handled"
+            check("read_pdf alt arg names", alt_arg_names)
+
+            def encrypted():
+                # build a password-protected PDF with pypdf's writer
+                pypdf = pdf._import_pypdf()
+                w = pypdf.PdfWriter()
+                w.append(pypdf.PdfReader(str(sandbox / "report.pdf")))
+                w.encrypt("secret")
+                with open(sandbox / "locked.pdf", "wb") as fh:
+                    w.write(fh)
+                out = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/locked.pdf"})
+                assert "password" in out and "Error" in out, out
+                return "password-protected pdf -> friendly message"
+            check("read_pdf encrypted pdf", encrypted)
+
+            def corrupt():
+                (sandbox / "bad.pdf").write_bytes(b"this is not a pdf at all")
+                r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/bad.pdf"})
+                assert "isn't a valid PDF" in r or "couldn't read" in r, r
+                return "corrupt/non-pdf -> friendly, no raise"
+            check("read_pdf corrupt pdf", corrupt)
+
+            def truncation():
+                orig = pdf.MAX_CHARS
+                pdf.MAX_CHARS = 10
+                try:
+                    r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/report.pdf"})
+                    assert "[truncated]" in r, r
+                finally:
+                    pdf.MAX_CHARS = orig
+                return "long pdf truncated with a note"
+            check("read_pdf truncation", truncation)
+        else:
+            print("  [SKIP] read_pdf parsing checks (pypdf not installed)")
+
+        def missing_dependency():
+            # force the dependency to look absent and prove the graceful message,
+            # independent of whether pypdf is actually installed here.
+            orig = pdf._import_pypdf
+            pdf._import_pypdf = lambda: None
+            try:
+                r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/report.pdf"})
+                assert "pypdf" in r and "Error" in r, r
+            finally:
+                pdf._import_pypdf = orig
+            return "missing pypdf -> friendly install message"
+        check("read_pdf missing-dependency guard", missing_dependency)
+
+        def wrong_type_steer():
+            (sandbox / "note.txt").write_text("hi")
+            r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/note.txt"})
+            assert "read_file" in r, r
+            (sandbox / "doc.docx").write_bytes(b"PK\x03\x04fake")
+            r2 = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/doc.docx"})
+            assert "read_document" in r2, r2
+            return "non-pdf types steered elsewhere"
+        check("read_pdf wrong-type steer", wrong_type_steer)
+
+        def containment_guard():
+            r = registry.dispatch("read_pdf", {"path": "C:\\Windows\\explorer.exe"})
+            assert "only work inside your own folders" in r, r
+            r2 = registry.dispatch("read_pdf",
+                {"path": "jarvis_pdf_smoke/../../../Windows/x.pdf"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked"
+        check("read_pdf containment guard", containment_guard)
+
+        def folder_and_missing():
+            r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke"})
+            assert "is a folder" in r, r
+            r2 = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/nope.pdf"})
+            assert "can't find" in r2, r2
+            return "folder + missing -> friendly messages"
+        check("read_pdf folder/missing guards", folder_and_missing)
+
+        def hallucination_guards():
+            # wrong types / weird shapes must not raise
+            registry.dispatch("read_pdf", {"path": 123})
+            registry.dispatch("read_pdf", {"path": ["a"]})
+            registry.dispatch("read_pdf", {"path": {}})
+            registry.dispatch("read_pdf", {"path": None})
+            assert "Error" in registry.dispatch("read_pdf", {"path": ""})
+            assert "Error" in registry.dispatch("read_pdf", {})  # missing arg
+            if have_pypdf:
+                # a stray extra arg is dropped, the call still succeeds
+                out = registry.dispatch("read_pdf",
+                    {"path": "jarvis_pdf_smoke/report.pdf", "reason": "curious"})
+                assert "budget report" in out, out
+            return "guards held"
+        check("read_pdf hallucination guards", hallucination_guards)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -3529,7 +3719,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "movefolder": t_movefolder, "copyfolder": t_copyfolder,
             "makefolder": t_makefolder, "duplicates": t_duplicates,
             "fileinfo": t_fileinfo, "compare": t_compare,
-            "disk": t_disk, "document": t_document,
+            "disk": t_disk, "document": t_document, "pdf": t_pdf,
             "explorer": t_explorer,
             "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
@@ -3549,7 +3739,7 @@ if __name__ == "__main__":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
         t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder()
         t_duplicates(); t_fileinfo(); t_compare(); t_disk()
-        t_document(); t_explorer()
+        t_document(); t_pdf(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()

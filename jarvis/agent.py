@@ -93,6 +93,12 @@ Rules:
   read_document with its path, NOT read_file (read_file only handles plain text
   and returns unreadable data for these); find the file first with find_files if
   you don't have its exact path, then summarise or answer from what it returns.
+  To READ a PDF (.pdf) document instead -- also a resume, letter, statement or
+  report ("read my resume.pdf", "summarise this PDF", "what does this letter
+  say") -- call read_pdf with its path, NOT read_file or read_document; it pulls
+  the text out of the PDF (a scanned image-only PDF or a password-protected one
+  is reported back so you can tell the user). read_pdf is for .pdf, read_document
+  is for .docx/.odt.
   Once you have found a
   file, to reorganise it call move_file (to move it into a folder or rename it)
   or copy_file (to duplicate it). Give source and dest; dest is either a folder

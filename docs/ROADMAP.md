@@ -1022,6 +1022,55 @@
       files), a folder source + missing file, the size cap, ASCII-only output, and
       the empty/missing/wrong-type guards. Full safe set: 259 checks, all PASS
 
+### Phase 37 — Read PDF documents (2026-07-31)
+- [x] `read_pdf` tool (`jarvis/tools/pdf.py`): completes document READING. Phase 28
+      added `read_document` for Word/ODT but it deliberately REFUSED a `.pdf`, yet a
+      PDF is the single most common document a real user has (resumes, letters,
+      bank statements, reports). Now Jarvis pulls the text out of a PDF so it can
+      read, summarise or answer questions about it ("read my resume.pdf",
+      "summarise this report", "what does this letter say") -- a real autonomy win
+      and the natural partner to `find_files` (locate the PDF, then read it)
+- [x] **First dependency added under the updated policy:** `pypdf` (pinned in
+      `requirements.txt`) -- a well-established, PURE-PYTHON, offline package (no
+      compiler, no binary wheel, no network; installed clean as
+      `pypdf-6.14.2-py3-none-any.whl`). It is imported LAZILY inside the tool, so
+      Jarvis's startup pays nothing, and if it is ever missing the tool degrades to
+      a friendly "install pypdf" message instead of crashing. Jarvis stays fully
+      local/offline
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      path outside home -- including a `..`-escape, resolved and re-checked -- is
+      REJECTED, so Jarvis can never read a PDF from `C:\Windows`
+- [x] Bounded everywhere: the file on disk (40 MB), the pages walked (500), a
+      wall-clock extraction budget (20 s), and the returned text (10000 chars,
+      truncated with a note) are all capped -- a giant or pathological PDF can't
+      exhaust memory, hang, or flood the agent's context; a page that won't extract
+      is skipped, not fatal
+- [x] Handles the real-world PDF cases gracefully: a password-protected PDF (an
+      empty password is tried first, then reported), a scanned/image-only PDF (no
+      text -> "it may be a scanned document" rather than a blank answer), and a
+      corrupt/non-PDF file are all friendly messages, not crashes. pypdf's own
+      warnings AND logging ("invalid pdf header", "EOF marker not found") are
+      silenced so a bad PDF is never console noise
+- [x] Pure ASCII out (reuses read_document's transliterator): curly quotes/dashes/
+      accents become clean ASCII (cafe, not caf?). Alt arg names accepted
+      (`file`/`document`/`doc`/`source`/`pdf`/...), a Word/ODT file steered to
+      read_document, a plain-text file to read_file, wrong-type/empty/missing args
+      coerced or rejected -- never raises
+- [x] Auto-registers via a new `pdf` import in `app.py`; the agent system prompt
+      steers "read/summarise that PDF" to `read_pdf` (read_pdf for .pdf,
+      read_document for .docx/.odt); `read_document`'s old "can't read PDFs yet"
+      message now points at read_pdf; the console "Try:" line suggests "read my
+      resume.pdf"
+- [x] `tests/smoke.py pdf` (in the safe set) builds a real minimal PDF by hand (no
+      writer dependency) and covers reading it, the ASCII transliteration, a
+      no-text/scanned PDF, alt arg names, a password-protected PDF, a corrupt/non-
+      PDF file, the truncation note, the graceful missing-dependency message
+      (forced regardless of environment), non-PDF types steered elsewhere, the
+      containment guard (absolute AND `..`-escape), folder + missing guards, and the
+      empty/missing/wrong-type guards. The PDF-parsing checks are GUARDED behind
+      pypdf being importable so the safe set passes clean either way. Full safe set:
+      271 checks, all PASS
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1118,10 +1167,12 @@
       (no dep), reuses read_json's shared loader, dotted/bracket key paths,
       home-contained, key-path length/step bounded, lists available fields on a
       miss, ASCII-only
-- [ ] Document reading next: a PDF reader (needs a dependency like pypdf, which is
-      NOT currently installed) so "read my resume.pdf"/"summarise this PDF" works;
-      read_document already tells the user PDFs aren't supported yet. Same
-      home-contained + bounded + ASCII care as read_document
+- [x] Document reading next: a PDF reader -- done in Phase 37 (`read_pdf`); the
+      first added dependency under the updated policy (`pypdf`, pure-Python/offline,
+      imported lazily so startup pays nothing and a missing dep degrades to a
+      friendly message). Home-contained, bounded (file size / pages / wall-clock /
+      returned chars), ASCII-transliterated, handles password-protected + scanned +
+      corrupt PDFs gracefully; read_document now steers a .pdf here
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

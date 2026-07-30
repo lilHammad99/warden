@@ -662,12 +662,52 @@ file_info (facts about one file vs differences between two).
   ASCII-only, and the empty/missing/wrong-type guards. Full safe set: 259 checks,
   all PASS.
 
+## 2026-07-31 — Read PDF documents (Phase 37) [FIRST DEPENDENCY ADDED]
+
+Added `read_pdf` (`jarvis/tools/pdf.py`): completes document READING. Phase 28's
+`read_document` reads Word/ODT but deliberately REFUSED a `.pdf`, yet PDFs are the
+most common real document a user has (resumes, letters, statements, reports).
+Jarvis can now read/summarise/answer about them ("read my resume.pdf", "summarise
+this report", "what does this letter say"). Natural partner to `find_files`.
+- **Dependency (new, allowed under the updated policy):** `pypdf`, pinned in
+  `requirements.txt`. Pure-Python, offline, no compiler/binary wheel (installed
+  clean as `pypdf-6.14.2-py3-none-any.whl`, no transitive deps). Imported LAZILY
+  inside the tool, so startup is unaffected; if it's ever missing the tool returns
+  a friendly "install pypdf" message instead of crashing. Jarvis stays fully
+  local/offline. To install on a fresh checkout:
+  `.venv\Scripts\python -m pip install pypdf` (or `-r requirements.txt`).
+- Reuses `organize._resolve_under_home` for containment (a path outside home,
+  incl. a `..`-escape, is REJECTED -> can't read `C:\Windows`) and
+  `document._ascii_body`/`_tidy` for readable pure-ASCII output (curly quotes/
+  dashes/accents transliterated: cafe not caf?). Bounded: file on disk 40 MB,
+  pages walked 500, a 20 s extraction wall-clock budget, returned text 10000 chars
+  (truncated + noted). A page that won't extract is skipped, not fatal.
+- Real-world PDF cases handled gracefully, never crash: password-protected (empty
+  password tried first, then reported), scanned/image-only (no text -> "it may be
+  a scanned document"), corrupt/non-PDF. pypdf's warnings AND its logging noise
+  ("invalid pdf header", "EOF marker not found") are silenced so a bad PDF never
+  reaches the console. Alt arg names (`file`/`document`/`doc`/`source`/`pdf`/...),
+  a .docx/.odt steered to read_document, a plain-text file to read_file, wrong-
+  type/empty/missing args coerced or rejected. Never raises.
+- Wired into `app.py` imports (`from .tools import pdf`) + the console "Try:" line
+  ("read my resume.pdf"), and the agent system prompt (read_pdf for .pdf,
+  read_document for .docx/.odt). `read_document`'s old "can't read PDFs yet"
+  message now steers to read_pdf.
+- `tests/smoke.py pdf` (safe set) builds a real minimal PDF by hand (no writer
+  dep) and covers reading it, ASCII transliteration, a no-text/scanned PDF, alt
+  arg names, a password-protected PDF, a corrupt/non-PDF, the truncation note, the
+  graceful missing-dependency message (forced regardless of environment), non-PDF
+  types steered elsewhere, containment (absolute + `..`-escape), folder + missing,
+  and the empty/missing/wrong-type guards. The PDF-parsing checks are GUARDED
+  behind pypdf being importable so the safe set passes clean either way. Full safe
+  set: 271 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 36 that is 61 without browser, 67 with. No tools are being silently
+after Phase 37 that is 62 without browser, 68 with. No tools are being silently
 dropped.
 
 ## How to test (in order)

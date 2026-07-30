@@ -194,8 +194,8 @@ def read_document(path: str = "", **extra) -> str:
     suffix = p.suffix.lower()
     if suffix not in (".docx", ".odt"):
         if suffix == ".pdf":
-            return ("Error: I can't read PDF files yet, sir; I can read Word "
-                    "(.docx) and OpenDocument (.odt) documents.")
+            return ("Error: that's a PDF, sir; use read_pdf for that. "
+                    "read_document reads Word (.docx) and OpenDocument (.odt).")
         if suffix in (".txt", ".md", ".csv", ".log", ".json", ".py", ".ini"):
             return (f"Error: '{_ascii(p.name)}' is a plain-text file, sir; use "
                     "read_file for that. read_document is for Word (.docx) and "
