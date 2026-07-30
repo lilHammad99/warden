@@ -1,6 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, clipboard, tasks, calc, dates,
-dispatch, agent, camera, vision, tts, hud, watch, e2e, all (default: safe set)
+reminders, dispatch, agent, camera, vision, tts, hud, watch, e2e, all
+(default: safe set)
 """
 
 import sys
@@ -23,7 +24,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, calc, camera, clipboard, dates, files, find, memory, registry, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, browser, calc, camera, clipboard, dates, files, find, memory, registry, reminders, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -462,6 +463,105 @@ def t_dates():
     check("dates hallucination guards", hallucination_guards)
 
 
+def t_reminders():
+    """Exercises the reminders/timers tool + its defenses against 8B
+    hallucinations. Firing is driven by due_reminders(now=<future>) so the test
+    is fully deterministic -- no model and no real waiting. Safe set."""
+    from datetime import datetime, timedelta
+    from jarvis.tools import reminders as rem
+    from jarvis.tools import registry
+
+    # isolate: use a temp store so we never touch the user's real reminders
+    import tempfile, os, pathlib
+    rem._STORE = pathlib.Path(tempfile.gettempdir()) / "jarvis_rem_smoke.json"
+    for p in (rem._STORE, rem._STORE.with_name("reminders.corrupt.json")):
+        if p.exists():
+            os.remove(p)
+
+    def happy_path():
+        out = registry.dispatch("set_reminder",
+                                {"text": "check the oven", "minutes": 10})
+        assert "Reminder set" in out and "check the oven" in out, out
+        assert rem.pending_count() == 1
+        lst = registry.dispatch("list_reminders", {})
+        assert "check the oven" in lst, lst
+        # pending reminders surface in the injected preamble
+        assert "check the oven" in rem.reminders_preamble()
+        return "set/list/preamble ok"
+    check("reminders happy path", happy_path)
+
+    def absolute_time():
+        # an unambiguous 24-hour clock time is accepted
+        out = registry.dispatch("set_reminder",
+                                {"text": "call mum", "at": "23:59"})
+        assert "Reminder set" in out, out
+        assert rem.pending_count() == 2
+        return "absolute time accepted"
+    check("reminders absolute time", absolute_time)
+
+    def firing_is_deterministic():
+        # nothing is due right now...
+        assert rem.due_reminders(datetime.now()) == []
+        # ...but everything is due far in the future; they fire once, then clear
+        fired = rem.due_reminders(datetime.now() + timedelta(days=2))
+        assert "check the oven" in fired and "call mum" in fired, fired
+        assert rem.pending_count() == 0, "fired reminders not cleared"
+        assert rem.due_reminders(datetime.now() + timedelta(days=3)) == []
+        return "due reminders fire exactly once"
+    check("reminders firing", firing_is_deterministic)
+
+    def cancel_flow():
+        registry.dispatch("set_reminder", {"text": "water plants", "minutes": 30})
+        registry.dispatch("set_reminder", {"text": "stand up", "minutes": 45})
+        registry.dispatch("set_reminder", {"text": "read a book", "minutes": 60})
+        before = rem.pending_count()
+        # cancel by substring
+        assert "Cancelled" in registry.dispatch("cancel_reminder", {"which": "plants"})
+        assert rem.pending_count() == before - 1
+        # cancel by list number (1 is now the soonest remaining)
+        assert "Cancelled" in registry.dispatch("cancel_reminder", {"which": "1"})
+        assert rem.pending_count() == before - 2
+        # a no-match cancel (with something still pending) is friendly, not a crash
+        assert "Nothing pending matches" in registry.dispatch(
+            "cancel_reminder", {"which": "zzzznope"})
+        return "cancel by text + number ok"
+    check("reminders cancel", cancel_flow)
+
+    def hallucination_guards():
+        # empty / missing text
+        assert "Error" in registry.dispatch("set_reminder", {"minutes": 5})
+        assert "Error" in registry.dispatch("set_reminder", {})
+        # no "when" at all
+        assert "Error" in registry.dispatch("set_reminder", {"text": "x"})
+        # both minutes AND at is refused, not guessed
+        assert "Error" in registry.dispatch(
+            "set_reminder", {"text": "x", "minutes": 5, "at": "10:00"})
+        # negative / zero / absurd / non-numeric delays rejected, never overflow
+        assert "Error" in registry.dispatch("set_reminder", {"text": "x", "minutes": -5})
+        assert "Error" in registry.dispatch("set_reminder", {"text": "x", "minutes": 0})
+        assert "Error" in registry.dispatch("set_reminder", {"text": "x", "minutes": 10 ** 12})
+        assert "Error" in registry.dispatch("set_reminder", {"text": "x", "minutes": "soon"})
+        # unreadable / ambiguous clock time refused, not guessed
+        assert "Error" in registry.dispatch("set_reminder", {"text": "x", "at": "half past"})
+        assert "Error" in registry.dispatch("set_reminder", {"text": "x", "at": "12/25/2026"})
+        # wrong types must not raise
+        registry.dispatch("set_reminder", {"text": 123, "minutes": "5"})
+        registry.dispatch("cancel_reminder", {"which": 5})
+        # over-long text is truncated, not rejected or unbounded
+        long = registry.dispatch("set_reminder", {"text": "x" * 5000, "minutes": 5})
+        assert "shortened" in long, long
+        return "guards held"
+    check("reminders hallucination guards", hallucination_guards)
+
+    def corrupt_store_recovers():
+        rem._STORE.write_text("{ not valid json ", encoding="utf-8")
+        # _load must not raise; corrupt file set aside, store treated as empty
+        assert rem.pending_count() == 0
+        assert rem._STORE.with_name("reminders.corrupt.json").exists()
+        return "corrupt store recovered"
+    check("reminders corrupt-store recovery", corrupt_store_recovers)
+
+
 def t_dispatch():
     """Exercises the self-correcting tool dispatcher: hallucinated tool names,
     junk argument shapes, extra/missing arguments. No model needed, so it lives
@@ -636,7 +736,7 @@ def t_e2e():
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
-            "dispatch": t_dispatch, "agent": t_agent,
+            "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
 
@@ -647,7 +747,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_clipboard()
-        t_tasks(); t_calc(); t_dates(); t_dispatch()
+        t_tasks(); t_calc(); t_dates(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

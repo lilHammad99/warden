@@ -8,4 +8,7 @@ data/memory.corrupt.json
 data/tasks.json
 data/tasks.tmp
 data/tasks.corrupt.json
+data/reminders.json
+data/reminders.tmp
+data/reminders.corrupt.json
 yolov8n.pt

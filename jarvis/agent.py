@@ -11,6 +11,7 @@ import ollama
 
 from .config import DESKTOP, HOME
 from .tools import memory as memory_store
+from .tools import reminders as reminder_store
 from .tools import tasks as task_list
 from .tools import registry
 
@@ -43,10 +44,17 @@ Rules:
   current date/time, weekday for the day a date falls on, days_until for a
   deadline or birthday, days_between for a span, and date_add for "N days from
   now". Prefer YYYY-MM-DD when passing dates.
-- To-do list: when the user asks to add/track something to do ("remind me to",
-  "add ... to my list", "I need to"), call add_task. To show it call
+- To-do list: when the user asks to add/track something to do ("add ... to my
+  list", "put ... on my list", "I need to"), call add_task. To show it call
   list_tasks; to check something off call complete_task; to delete call
   remove_task. Anything under "The user's current to-do list" below is open.
+- Reminders/timers: when the user wants to be told something at a LATER time
+  ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
+  17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)
+  OR at (a clock time). You will announce it yourself when it fires, so do not
+  promise to and then forget. Use list_reminders / cancel_reminder to show or
+  cancel them. A reminder fires once at a time; a to-do task is an open item
+  with no time -- pick the one the user means.
 """
 
 MAX_TOOL_ROUNDS = 8
@@ -85,6 +93,10 @@ class Agent:
             preamble = ""
         try:
             preamble += task_list.tasks_preamble()
+        except Exception:
+            pass
+        try:
+            preamble += reminder_store.reminders_preamble()
         except Exception:
             pass
         self.messages[0] = {"role": "system", "content": SYSTEM_PROMPT + preamble}

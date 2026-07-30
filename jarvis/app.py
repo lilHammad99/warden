@@ -1,5 +1,6 @@
 import datetime
 import sys
+import threading
 
 from . import config as config_mod
 from .agent import Agent
@@ -38,6 +39,7 @@ def main():
     from .tools import dates  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
+    from .tools import reminders as reminder_store  # noqa: F401
     from .tools import shell  # noqa: F401
     from .tools import tasks as task_list  # noqa: F401
     from .tools import registry
@@ -72,16 +74,41 @@ def main():
     resting = "idle" if cfg["voice"]["enabled"] else "off"
     hud.state(resting)
 
+    # background reminder poller: fires due reminders on its own, so Jarvis can
+    # speak up later without being asked again. Daemon thread; never crashes.
+    stop_reminders = threading.Event()
+
+    def _reminder_watch():
+        while not stop_reminders.is_set():
+            try:
+                for text in reminder_store.due_reminders():
+                    line = f"Reminder, sir: {text}"
+                    print(f"\njarvis> {line}\nyou> ", end="", flush=True)
+                    hud.state("speaking")
+                    speaker.say(line)
+                    hud.state(resting)
+            except Exception:
+                pass
+            stop_reminders.wait(15)  # check about every 15 seconds
+
+    threading.Thread(target=_reminder_watch, daemon=True).start()
+
     n_mem = memory_store.count()
     mem_status = f"{n_mem} fact{'s' if n_mem != 1 else ''} remembered" if n_mem else "empty"
     n_todo = task_list.open_count()
     todo_status = f"{n_todo} open task{'s' if n_todo != 1 else ''}" if n_todo else "clear"
+    n_rem = reminder_store.pending_count()
+    if n_rem:
+        nxt = reminder_store.next_due_phrase()
+        rem_status = f"{n_rem} pending" + (f" ({nxt})" if nxt else "")
+    else:
+        rem_status = "none"
     print(BANNER)
     rule = "-" * 64
     print(rule)
     print(f"model: {cfg['models']['chat']} | vision: {cfg['models']['vision']}"
           f" | voice: {voice_status} | browser tools: {'on' if browser_ok else 'off'}")
-    print(f"memory: {mem_status} | to-do: {todo_status}"
+    print(f"memory: {mem_status} | to-do: {todo_status} | reminders: {rem_status}"
           f"  ({len(registry.specs())} tools online)")
     print(rule)
     print(_greeting())
@@ -89,8 +116,8 @@ def main():
         print(f"Reminder: you have {n_todo} thing{'s' if n_todo != 1 else ''} "
               "on your to-do list. Say 'what's on my list' to hear it.")
     print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
-          "how many days until christmas / add milk to my to-do list / "
-          "find my resume\n")
+          "remind me in 10 minutes to stretch / how many days until christmas / "
+          "add milk to my to-do list / find my resume\n")
 
     while True:
         try:
@@ -101,6 +128,7 @@ def main():
             continue
         if text.lower() in ("exit", "quit", "bye"):
             print("jarvis> Goodbye, sir.")
+            stop_reminders.set()
             speaker.say("Goodbye, sir.")
             speaker.stop()
             hud.shutdown()

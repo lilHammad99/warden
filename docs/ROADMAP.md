@@ -176,6 +176,32 @@
       suggestion, bad-name guards, arg-shape normalization, extra-arg dropping,
       missing-required reporting, and list_tools
 
+### Phase 14 — Reminders & timers (2026-07-30)
+- [x] `set_reminder` / `list_reminders` / `cancel_reminder` tools
+      (`jarvis/tools/reminders.py`): the biggest autonomy win yet — instead of
+      only reacting, Jarvis acts on its OWN later, unprompted ("remind me in 10
+      minutes to check the oven", "set a timer for 5 minutes", "remind me at
+      17:30 to call mum") and announces it out loud when the time comes
+- [x] A background daemon thread in `app.py` polls `due_reminders()` every ~15s
+      and speaks/prints anything due; reminders persist across restarts in
+      `data/reminders.json` (gitignored) and are injected into the agent system
+      prompt so Jarvis stays aware of them
+- [x] Firing is driven by a pure `due_reminders(now)` function, so the smoke
+      test is fully deterministic — no model, no real waiting
+- [x] Accepts EITHER a relative `minutes` delay OR an unambiguous absolute `at`
+      time ("17:30", "2026-12-25 09:00"); ambiguous slash dates and both-at-once
+      are REFUSED, not guessed; a time already passed today rolls to tomorrow
+- [x] Hardened vs 8B hallucinations: empty/oversized/wrong-type text bounded,
+      `minutes` coerced and rejected if negative/zero/non-finite/absurd (so
+      `minutes=1e12` can't overflow), 100-reminder cap, atomic writes,
+      corrupt-file recovery — never crashes the agent
+- [x] Startup status line now shows pending-reminder count + next-due phrase,
+      and the "Try:" line suggests "remind me in 10 minutes to stretch"; all
+      console output stays pure ASCII
+- [x] `tests/smoke.py reminders` (in the safe set) covers set/list/preamble,
+      absolute times, deterministic firing, cancel by text+number, the
+      hallucination guards, and corrupt-store recovery
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
