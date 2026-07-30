@@ -44,6 +44,9 @@ Rules:
 - Math: for ANY arithmetic or calculation (sums, percentages, roots, etc.),
   call calculate with the expression instead of working it out yourself; it is
   always exact, and your own mental math is not.
+- Unit conversions: for ANY "convert X to Y" (miles to km, C to F, kg to lb,
+  cups to ml, mph to km/h, GB to MB, etc.), call convert_units with value,
+  from_unit and to_unit instead of guessing; it is always exact.
 - Dates: for ANYTHING about the calendar, do not guess. Call today for the
   current date/time, weekday for the day a date falls on, days_until for a
   deadline or birthday, days_between for a span, and date_add for "N days from

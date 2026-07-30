@@ -91,6 +91,27 @@ to Tuesday"). Closes the top memory item in ROADMAP Future work.
   and the console "Try:" line. `tests/smoke.py memory` (safe set) gains two
   update_fact checks (happy path + guards). Full safe set: 45 tools, all PASS.
 
+## 2026-07-30 — Unit converter (Phase 17)
+
+Added `convert_units` (`jarvis/tools/convert.py`): exact unit conversion, the
+natural third member of the exact-computation family after `calculate` (numbers)
+and the date tools (calendar). The 8B model is unreliable at conversions, so it
+can now answer "how many km is 5 miles", "convert 32 F to C", "how many ml in a
+cup", "60 mph in km/h", "2 GB to MB" exactly.
+- Pure stdlib, no new dependency. Categories: length, mass, volume, temperature,
+  time, speed, area, data. Linear categories convert via a factor to a per-
+  category base unit; temperature is special-cased (affine, via Celsius).
+- Hardened like the rest: unknown units refused (allowlist + plural fallback),
+  cross-category conversions refused, value magnitude capped (non-finite/1e400
+  rejected), unit/phrase strings length-bounded, wrong types coerced. Forgiving:
+  accepts `from`/`to` as well as `from_unit`/`to_unit`, and parses a whole phrase
+  ("5 miles to km") dumped into one field. Never raises; output pure ASCII.
+- Wired into `app.py` imports, agent system prompt (steer "convert X to Y"), and
+  the console "Try:" line ("convert 5 miles to km").
+- `tests/smoke.py convert` added to the safe set (happy path, affine temperature,
+  forgiving input, cross-category + unknown-unit guards, magnitude/overflow
+  guards, wrong-type shapes, ASCII-only). Full safe set: 47 tools, all PASS.
+
 ## How to test (in order)
 
 ```

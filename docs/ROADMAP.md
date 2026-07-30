@@ -258,6 +258,33 @@
       multi-match safety, the empty/missing/wrong-type/over-long guards, and
       dedup-on-update
 
+### Phase 17 — Unit converter (2026-07-30)
+- [x] `convert_units` tool (`jarvis/tools/convert.py`): the 8B model is
+      unreliable at unit conversions, so this lets it answer any "convert X to Y"
+      exactly ("how many km is 5 miles", "convert 32 F to C", "how many ml in a
+      cup", "60 mph in km/h", "2 GB to MB") instead of guessing -- an
+      accuracy/autonomy win that rounds out the exact-computation family
+      (`calculate` for numbers, the date tools for the calendar)
+- [x] Pure stdlib, NO new dependency: length, mass, volume, temperature, time,
+      speed, area and data, via factor maths to a per-category base unit;
+      temperature is handled specially as an affine (offset) scale, not a ratio
+- [x] Unknown units are REFUSED, not guessed (allowlist of names/symbols/aliases
+      with a plural fallback); cross-category conversions ("miles to kilograms",
+      temperature vs a linear unit) are refused with a clear note rather than
+      producing nonsense
+- [x] Forgiving to 8B quirks: wrong-type args coerced, the model may pass the
+      units as `from`/`to` (not just `from_unit`/`to_unit`), or dump a whole
+      phrase like "5 miles to km" into one field -- all handled instead of
+      dead-ending; value magnitude capped (a hallucinated `1e400`/non-finite
+      value can't overflow), unit/phrase strings length-bounded; never raises,
+      output stays pure ASCII
+- [x] Agent system prompt now steers any "convert X to Y" to `convert_units`;
+      the console "Try:" line suggests "convert 5 miles to km"
+- [x] `tests/smoke.py convert` (in the safe set) covers length/mass/temperature
+      conversions, the affine temperature scale, forgiving input (alt arg names,
+      phrase, string value), the cross-category + unknown-unit guards, the
+      magnitude/overflow guards, wrong-type shapes, and ASCII-only output
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.

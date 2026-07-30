@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, clipboard, tasks, calc,
-dates, reminders, dispatch, agent, camera, vision, tts, hud, watch, e2e, all
-(default: safe set)
+dates, convert, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+e2e, all (default: safe set)
 """
 
 import sys
@@ -24,7 +24,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, calc, camera, clipboard, dates, files, find, memory, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, browser, calc, camera, clipboard, convert, dates, files, find, memory, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -616,6 +616,96 @@ def t_dates():
     check("dates hallucination guards", hallucination_guards)
 
 
+def t_convert():
+    """Exercises the unit converter + its defenses against 8B hallucinations.
+    No model needed, so it lives in the safe set."""
+    from jarvis.tools import convert  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    def happy_path():
+        # length: 5 miles is exactly 8.04672 km
+        out = registry.dispatch("convert_units",
+                                {"value": 5, "from_unit": "mi", "to_unit": "km"})
+        assert out.startswith("5 mi = 8.04672 km"), out
+        # full unit names resolve too, and a whole float renders as an int
+        km = registry.dispatch("convert_units",
+                               {"value": 1, "from_unit": "kilometer", "to_unit": "meters"})
+        assert "= 1000 m" in km, km
+        # mass: 1 kg = 1000 g
+        assert "= 1000 g" in registry.dispatch(
+            "convert_units", {"value": 1, "from_unit": "kg", "to_unit": "grams"})
+        return "length + mass conversions exact"
+    check("convert happy path", happy_path)
+
+    def temperature_is_affine():
+        # temperature uses an offset scale, not a plain ratio
+        assert "= 32 F" in registry.dispatch(
+            "convert_units", {"value": 0, "from_unit": "C", "to_unit": "F"})
+        assert "= 212 F" in registry.dispatch(
+            "convert_units", {"value": 100, "from_unit": "celsius", "to_unit": "fahrenheit"})
+        assert "= 273.15 K" in registry.dispatch(
+            "convert_units", {"value": 0, "from_unit": "C", "to_unit": "K"})
+        return "temperature converts correctly"
+    check("convert temperature", temperature_is_affine)
+
+    def forgiving_input():
+        # model uses 'from'/'to' instead of from_unit/to_unit -> still works
+        alt = registry.dispatch("convert_units",
+                                {"value": 5, "from": "mi", "to": "km"})
+        assert alt.startswith("5 mi = 8.04672 km"), alt
+        # a whole phrase dumped into one field is parsed
+        ph = registry.dispatch("convert_units", {"value": "5 miles to km"})
+        assert ph.startswith("5 mi = 8.04672 km"), ph
+        # numeric string value is coerced
+        s = registry.dispatch("convert_units",
+                              {"value": "2", "from_unit": "kg", "to_unit": "lb"})
+        assert s.startswith("2 kg ="), s
+        return "alt arg names + phrase + string value handled"
+    check("convert forgiving input", forgiving_input)
+
+    def cross_category_refused():
+        # miles -> kilograms is nonsense: refused, not answered
+        r = registry.dispatch("convert_units",
+                              {"value": 5, "from_unit": "mi", "to_unit": "kg"})
+        assert "can't convert length to mass" in r, r
+        # mixing temperature with a linear unit is refused too
+        r2 = registry.dispatch("convert_units",
+                               {"value": 5, "from_unit": "C", "to_unit": "km"})
+        assert "can't convert temperature" in r2, r2
+        return "cross-category conversions refused"
+    check("convert cross-category guard", cross_category_refused)
+
+    def output_is_ascii():
+        registry.dispatch("convert_units",
+                          {"value": 1, "from_unit": "cup", "to_unit": "ml"}).encode("ascii")
+        return "output stayed pure ASCII"
+    check("convert ascii-only output", output_is_ascii)
+
+    def hallucination_guards():
+        # unknown units are refused, not guessed at
+        assert 'do not know the unit "florbs"' in registry.dispatch(
+            "convert_units", {"value": 5, "from_unit": "florbs", "to_unit": "km"})
+        # missing value / units -> friendly error, not a crash
+        assert "Error" in registry.dispatch(
+            "convert_units", {"from_unit": "mi", "to_unit": "km"})
+        assert "Error" in registry.dispatch(
+            "convert_units", {"value": 5, "from_unit": "mi"})
+        assert "Error" in registry.dispatch("convert_units", {})
+        # absurd / non-finite magnitude is rejected, never overflows
+        assert "Error" in registry.dispatch(
+            "convert_units", {"value": 1e400, "from_unit": "m", "to_unit": "km"})
+        assert "Error" in registry.dispatch(
+            "convert_units", {"value": float("inf"), "from_unit": "m", "to_unit": "km"})
+        # bool value is junk, not treated as 1
+        assert "Error" in registry.dispatch(
+            "convert_units", {"value": True, "from_unit": "m", "to_unit": "km"})
+        # wrong types / odd shapes must not raise
+        registry.dispatch("convert_units", {"value": "abc", "from_unit": 5, "to_unit": None})
+        registry.dispatch("convert_units", {"value": [1, 2], "from_unit": {}, "to_unit": "km"})
+        return "guards held"
+    check("convert hallucination guards", hallucination_guards)
+
+
 def t_reminders():
     """Exercises the reminders/timers tool + its defenses against 8B
     hallucinations. Firing is driven by due_reminders(now=<future>) so the test
@@ -890,6 +980,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
+            "convert": t_convert,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
@@ -902,7 +993,7 @@ if __name__ == "__main__":
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
         t_clipboard()
-        t_tasks(); t_calc(); t_dates(); t_reminders(); t_dispatch()
+        t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

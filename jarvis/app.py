@@ -36,6 +36,7 @@ def main():
     from .tools import calc  # noqa: F401
     from .tools import camera  # noqa: F401
     from .tools import clipboard  # noqa: F401
+    from .tools import convert  # noqa: F401
     from .tools import dates  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
@@ -117,9 +118,9 @@ def main():
         print(f"Reminder: you have {n_todo} thing{'s' if n_todo != 1 else ''} "
               "on your to-do list. Say 'what's on my list' to hear it.")
     print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
-          "remind me in 10 minutes to stretch / how many days until christmas / "
-          "add milk to my to-do list / find my resume / "
-          "which file mentions the wifi password / "
+          "convert 5 miles to km / remind me in 10 minutes to stretch / "
+          "how many days until christmas / add milk to my to-do list / "
+          "find my resume / which file mentions the wifi password / "
           "actually my wifi password changed to hunter2\n")
 
     while True:
