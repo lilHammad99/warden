@@ -599,6 +599,51 @@
       folder, alt arg names, the containment guard, the missing-source message,
       ASCII-only output, and the empty/missing/wrong-type guards
 
+### Phase 27 — Copy a whole folder (2026-07-30)
+- [x] `copy_folder` tool (`jarvis/tools/organize.py`, alongside move_file/
+      copy_file/make_folder/move_folder): the organise family could COPY a single
+      file (`copy_file`) and MOVE a whole folder (`move_folder`), but not copy a
+      whole folder. Now Jarvis can duplicate an entire tree ("copy my Taxes folder
+      into Backups", "duplicate my Projects folder", "make a copy of my notes
+      folder") -- the natural partner to move_folder and the backup counterpart to
+      copy_file
+- [x] Give source (the folder) and dest: dest can be a folder to copy it INTO, or
+      a bare new name/path for the copy. The original is always left exactly where
+      it is
+- [x] Rooted in the user's home only (shares `organize._resolve_folder_pair` ->
+      `_resolve_under_home`): BOTH the source folder AND the destination are
+      rejected unless they live inside the user's home, so Jarvis can never copy a
+      folder into `C:\Windows` or out of the user's own folders; the home folder
+      itself is never copied
+- [x] Never destructive: an existing destination folder is never overwritten OR
+      merged into (refused), and **a folder is never copied into one of its own
+      subfolders** (`src in target.parents` refused) -- the footgun that would
+      recurse and duplicate endlessly. A FILE source is refused and points the
+      model at copy_file; destination depth is capped (`MAX_NEW_DEPTH`, 12)
+- [x] **Bounded on size/count** (a copy duplicates every byte, unlike a move which
+      is a rename): the tree is pre-measured (nothing pruned, so the caps are
+      honest) and REFUSED before a single byte is written if it exceeds
+      `MAX_COPY_FILES` (5000), `MAX_COPY_TREE_BYTES` (500 MB), a walk-depth cap, or
+      a wall-clock budget -- a hallucinated "copy everything" can't fill the disk
+      or hang. On any copy error the partial copy is removed (target never existed
+      before, so only our own bytes are cleared)
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`from`/`to`/`into`/`directory`/...), a
+      bare new name sanitised of path parts, missing source and file source
+      reported as friendly messages, the file count + total size reported on
+      success, all output forced to pure ASCII -- never raises, never crashes
+- [x] Auto-registers via the already-present `organize` import in `app.py`; the
+      agent system prompt steers "copy/duplicate a whole FOLDER" to copy_folder (vs
+      copy_file for a single file); the console "Try:" line suggests "copy my taxes
+      folder into backups"
+- [x] `tests/smoke.py copyfolder` (in the safe set) covers copy-into-folder
+      (original kept), rename-in-place + file-count/size report, the never-
+      overwrite/merge guard, refusing to copy a folder into its own subfolder,
+      refusing a file source (points at copy_file), refusing the home folder, alt
+      arg names, the containment guard, the missing-source message, the size/count
+      cap (nothing written when over cap), ASCII-only output, and the
+      empty/missing/wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -642,9 +687,13 @@
 - [x] File management: move/rename a whole FOLDER -- done in Phase 26
       (`move_folder`); home-contained, never overwrites/merges, never moves a
       folder into its own subfolder, depth-capped, file source points at move_file
-- [ ] File management next: copying whole folders (a copy_folder counterpart to
-      move_folder, bounded on size/count); recycling whole folders with
-      recycle_file (needs the same care as files-only today)
+- [x] File management: copy a whole FOLDER -- done in Phase 27 (`copy_folder`);
+      home-contained, never overwrites/merges, never copies a folder into its own
+      subfolder, depth-capped, pre-measured + bounded on size/count (500 MB / 5000
+      files), file source points at copy_file
+- [ ] File management next: recycling whole folders with recycle_file (needs the
+      same care as files-only today, i.e. an undoable Recycle-Bin send that
+      refuses the home folder and is size/count aware)
 - [x] Disk-usage next: an `open_folder` tool (reveal a folder in Explorer) so
       after folder_size flags a heavy folder the user can jump straight to it --
       done in Phase 25 (`open_folder`); read-only, home-contained, reveals a file

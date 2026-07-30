@@ -71,7 +71,11 @@ Rules:
   FOLDER rather than a single file ("move my Taxes folder into Documents",
   "rename my Projects folder to Archive"), call move_folder with source and dest;
   it never overwrites or merges into an existing folder, and never moves a folder
-  inside one of its own subfolders -- use move_file for a single file. To create
+  inside one of its own subfolders -- use move_file for a single file. To COPY a
+  whole folder rather than move it ("copy my Taxes folder into Backups",
+  "duplicate my Projects folder"), call copy_folder with source and dest; the
+  original stays put, it never overwrites an existing folder, and a very large
+  folder is refused (use copy_file for a single file). To create
   a new folder to
   organise things ("make a folder called Taxes in Documents", "create a Projects
   folder on my Desktop"), call make_folder with path (e.g. 'Documents/Taxes');

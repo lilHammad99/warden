@@ -12,6 +12,7 @@ Tools:
 - ``copy_file``    -- duplicate a file (the original stays put).
 - ``make_folder``  -- create a new folder to organise into.
 - ``move_folder``  -- move a WHOLE folder into another folder, or rename it.
+- ``copy_folder``  -- duplicate a WHOLE folder (the original stays put).
 
 Safety model (strict, because an 8B local model WILL eventually pass junk, the
 wrong type, or try to clobber the wrong file):
@@ -32,7 +33,9 @@ wrong type, or try to clobber the wrong file):
   string the model can read and recover from.
 """
 
+import os
 import shutil
+import time
 from pathlib import Path
 
 from ..config import HOME
@@ -43,6 +46,10 @@ MAX_PATH_LEN = 400                       # a path, not an essay
 MAX_NAME_LEN = 200                       # a file name, not a paragraph
 MAX_COPY_BYTES = 500 * 1024 * 1024       # refuse to copy anything bigger (500 MB)
 MAX_NEW_DEPTH = 12                       # cap how deep a single make_folder may nest
+MAX_COPY_FILES = 5000                    # most files copied in one copy_folder
+MAX_COPY_TREE_BYTES = 500 * 1024 * 1024  # most total bytes for a folder copy (500 MB)
+MAX_WALK_DEPTH = 40                      # how deep the copy pre-scan walks
+COPY_TIME_BUDGET = 20.0                  # wall-clock cap while measuring a tree
 
 
 def _ascii(text: str) -> str:
@@ -325,16 +332,17 @@ def make_folder(path: str = "", parent: str = "", **extra) -> str:
     return f"Created folder {_ascii(str(target))}, sir."
 
 
-def _resolve_folder_pair(src_raw: str, dst_raw: str):
-    """Work out the concrete (source, target) folder paths for a folder move, or
-    an error. Both ends are kept inside the user's home; the destination may be a
-    folder to drop the source INTO, a bare new name (rename in place), or a full
-    new path. Never raises.
+def _resolve_folder_pair(src_raw: str, dst_raw: str, single_file_tool: str = "move_file"):
+    """Work out the concrete (source, target) folder paths for a folder move or
+    copy, or an error. Both ends are kept inside the user's home; the destination
+    may be a folder to drop the source INTO, a bare new name (rename in place), or
+    a full new path. Never raises.
 
-    Folder moves carry extra footguns a file move does not, so this is stricter:
-    the source must be a real folder (not a file), never the home folder itself,
-    and the target may never land inside the source (moving a tree into one of
-    its own subfolders)."""
+    Folder moves/copies carry extra footguns a file move does not, so this is
+    stricter: the source must be a real folder (not a file), never the home folder
+    itself, and the target may never land inside the source (moving/copying a tree
+    into one of its own subfolders). ``single_file_tool`` names the tool a file
+    source is redirected to (move_file for move_folder, copy_file for copy_folder)."""
     if not src_raw:
         return None, None, "Error: tell me which folder to move, sir."
     if not dst_raw:
@@ -352,7 +360,8 @@ def _resolve_folder_pair(src_raw: str, dst_raw: str):
         return None, None, f"Error: I can't find '{_ascii(str(src))}', sir."
     if not src.is_dir():
         return None, None, (f"Error: '{_ascii(src.name)}' is a file, sir; use "
-                            "move_file for a single file, not move_folder.")
+                            f"{single_file_tool} for a single file, not a whole "
+                            "folder.")
 
     dst, err = _resolve_under_home(dst_raw)
     if dst is None:
@@ -444,3 +453,113 @@ def move_folder(source: str = "", dest: str = "", **extra) -> str:
 
     verb = "Renamed" if src.parent == target.parent else "Moved"
     return f"{verb} folder {_ascii(src.name)} to {_ascii(str(target))}, sir."
+
+
+def _measure_tree(root: Path):
+    """Measure a folder subtree: returns (n_files, total_bytes, error_or_empty).
+
+    Unlike a folder MOVE (a cheap rename), a folder COPY duplicates every byte on
+    disk, so an 8B model pointing copy_folder at a huge tree could fill the disk
+    or hang. This pre-scan is bounded on file count, total bytes, walk depth and
+    wall-clock time; if any cap is exceeded it returns a friendly error string so
+    the copy is REFUSED before a single byte is written. Nothing is pruned, so the
+    caps are honest. Never raises."""
+    n_files = 0
+    total = 0
+    root_depth = len(root.parts)
+    started = time.monotonic()
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            if len(Path(dirpath).parts) - root_depth > MAX_WALK_DEPTH:
+                dirnames[:] = []
+                continue
+            for fn in filenames:
+                try:
+                    total += (Path(dirpath) / fn).stat().st_size
+                except OSError:
+                    continue  # vanished / permission: skip, never crash
+                n_files += 1
+                if n_files > MAX_COPY_FILES:
+                    return n_files, total, ("Error: that folder has too many "
+                                            "files to copy safely, sir; copy a "
+                                            "smaller folder.")
+                if total > MAX_COPY_TREE_BYTES:
+                    return n_files, total, (f"Error: that folder is over "
+                                            f"{_mb(MAX_COPY_TREE_BYTES)}, too "
+                                            "large for me to copy safely, sir.")
+            if time.monotonic() - started > COPY_TIME_BUDGET:
+                return n_files, total, ("Error: measuring that folder took too "
+                                        "long, sir; copy a smaller folder.")
+    except Exception:
+        pass  # last-resort guard: use whatever we measured, never crash
+    return n_files, total, ""
+
+
+@tool(
+    "copy_folder",
+    "Make a copy of a WHOLE folder (and everything in it); the original stays "
+    "where it is. Use this when the user asks to duplicate or back up a FOLDER "
+    "(not a single file) -- 'copy my Taxes folder into Backups', 'duplicate my "
+    "Projects folder', 'make a copy of my notes folder'. Give source (the folder "
+    "to copy) and dest: dest can be a folder to copy it into, or a new name/path "
+    "for the copy. Only the user's own folders are allowed, an existing folder is "
+    "never overwritten or merged into, and a very large folder is refused. For a "
+    "single file use copy_file instead.",
+    {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "description": "The folder to copy, e.g. 'Desktop/Taxes'.",
+            },
+            "dest": {
+                "type": "string",
+                "description": "A folder to copy it into (e.g. 'Backups') or a "
+                "new name/path for the copy (e.g. 'Taxes_backup').",
+            },
+        },
+        "required": ["source", "dest"],
+    },
+)
+def copy_folder(source: str = "", dest: str = "", **extra) -> str:
+    src_raw = _first_str(source, extra.get("from"), extra.get("src"),
+                         extra.get("path"), extra.get("folder"),
+                         extra.get("directory"), extra.get("dir"),
+                         extra.get("source_path"))
+    dst_raw = _first_str(dest, extra.get("destination"), extra.get("to"),
+                         extra.get("target"), extra.get("new_path"),
+                         extra.get("new_name"), extra.get("dest_path"),
+                         extra.get("into"))
+
+    src, target, err = _resolve_folder_pair(src_raw, dst_raw,
+                                            single_file_tool="copy_file")
+    if err:
+        return err
+    if src == target:
+        return ("Error: give the copy a different name or folder, sir, so it "
+                "doesn't clash with the original.")
+    # never copy a folder into itself or one of its own subfolders -- that would
+    # recurse and duplicate endlessly.
+    if src in target.parents:
+        return (f"Error: I can't copy '{_ascii(src.name)}' into itself, sir; "
+                "pick a folder outside it.")
+    if target.exists():
+        return (f"Error: '{_ascii(str(target))}' already exists, sir; I won't "
+                "overwrite or merge into it. Pick another name.")
+
+    n_files, total, merr = _measure_tree(src)
+    if merr:
+        return merr
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src, target)
+    except Exception as e:
+        # target did not exist before us, so removing it only clears our own
+        # partial copy -- never any of the user's existing data.
+        shutil.rmtree(target, ignore_errors=True)
+        return f"Error: couldn't copy that folder, sir ({_ascii(str(e))})."
+
+    return (f"Copied folder {_ascii(src.name)} ({n_files} "
+            f"file{'s' if n_files != 1 else ''}, {_mb(total)}) to "
+            f"{_ascii(str(target))}, sir.")

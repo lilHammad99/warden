@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-movefolder, makefolder, disk, explorer, archive, extract, recycle, clipboard, tasks, calc,
+movefolder, copyfolder, makefolder, disk, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
@@ -769,6 +769,166 @@ def t_movefolder():
             registry.dispatch("move_folder", {"source": ["a"], "dest": {}})
             return "guards held"
         check("movefolder hallucination guards", hallucination_guards)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_copyfolder():
+    """Exercises the copy_folder tool (duplicate a WHOLE folder) + its defenses
+    against 8B hallucinations. Works entirely inside a temp tree in the user's
+    home (the only place it touches), so it is deterministic, needs no model, and
+    lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import organize as org  # noqa: F401  (register copy_folder)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_copyfolder_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+
+    def mkdir(rel):
+        p = sandbox / rel
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def mkfile(rel, text="x"):
+        p = sandbox / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    try:
+        sandbox.mkdir(parents=True, exist_ok=True)
+
+        def copy_into_folder():
+            mkfile("Taxes/receipt.txt", "receipt")
+            mkfile("Taxes/sub/note.txt", "note")
+            mkdir("Backups")
+            out = registry.dispatch("copy_folder",
+                {"source": "jarvis_copyfolder_smoke/Taxes",
+                 "dest": "jarvis_copyfolder_smoke/Backups"})
+            assert "Copied folder" in out, out
+            # the copy exists with its full contents...
+            assert (sandbox / "Backups" / "Taxes" / "receipt.txt").exists()
+            assert (sandbox / "Backups" / "Taxes" / "sub" / "note.txt").exists()
+            # ...and the ORIGINAL is left exactly where it was
+            assert (sandbox / "Taxes" / "receipt.txt").exists(), "original gone"
+            return "copied a whole folder, original kept"
+        check("copyfolder copy into folder", copy_into_folder)
+
+        def copy_reports_count_and_size():
+            mkfile("Counted/a.txt", "aaaa")
+            mkfile("Counted/b.txt", "bb")
+            out = registry.dispatch("copy_folder",
+                {"source": "jarvis_copyfolder_smoke/Counted",
+                 "dest": "Counted_copy"})
+            assert "2 files" in out, out
+            assert (sandbox / "Counted_copy" / "a.txt").exists()
+            assert (sandbox / "Counted").exists()
+            return "reports file count + size, renames a copy in place"
+        check("copyfolder rename-in-place + count", copy_reports_count_and_size)
+
+        def never_overwrites():
+            mkfile("Src/a.txt", "A")
+            mkdir("Dst/Src")           # a folder named Src already sits in Dst
+            out = registry.dispatch("copy_folder",
+                {"source": "jarvis_copyfolder_smoke/Src",
+                 "dest": "jarvis_copyfolder_smoke/Dst"})
+            assert "won't overwrite or merge" in out, out
+            return "refuses to merge into an existing folder"
+        check("copyfolder never overwrites", never_overwrites)
+
+        def refuses_into_own_subfolder():
+            mkdir("Proj/sub")
+            r = registry.dispatch("copy_folder",
+                {"source": "jarvis_copyfolder_smoke/Proj",
+                 "dest": "jarvis_copyfolder_smoke/Proj/sub"})
+            assert "into itself" in r, r
+            return "refuses copying a folder into its own subfolder"
+        check("copyfolder refuses into own subfolder", refuses_into_own_subfolder)
+
+        def refuses_file_source():
+            mkfile("solo.txt", "s")
+            r = registry.dispatch("copy_folder",
+                {"source": "jarvis_copyfolder_smoke/solo.txt", "dest": "gone"})
+            assert "is a file" in r and "copy_file" in r, r
+            assert (sandbox / "solo.txt").exists()
+            return "a file source is refused (points at copy_file)"
+        check("copyfolder refuses file source", refuses_file_source)
+
+        def refuses_home_folder():
+            r = registry.dispatch("copy_folder",
+                {"source": str(home), "dest": "jarvis_copyfolder_smoke/whoops"})
+            assert "home folder" in r, r
+            return "refuses to copy the whole home folder"
+        check("copyfolder refuses home folder", refuses_home_folder)
+
+        def alt_arg_names():
+            mkfile("Alt/z.txt", "z")
+            mkdir("Bin")
+            out = registry.dispatch("copy_folder",
+                {"from": "jarvis_copyfolder_smoke/Alt",
+                 "into": "jarvis_copyfolder_smoke/Bin"})
+            assert "Copied folder" in out, out
+            assert (sandbox / "Bin" / "Alt" / "z.txt").exists()
+            assert (sandbox / "Alt" / "z.txt").exists(), "original gone"
+            return "alt from/into arg names handled"
+        check("copyfolder alt arg names", alt_arg_names)
+
+        def containment_guard():
+            mkdir("Esc")
+            r = registry.dispatch("copy_folder",
+                {"source": "jarvis_copyfolder_smoke/Esc",
+                 "dest": "C:\\Windows\\Esc"})
+            assert "only work inside your own folders" in r, r
+            assert not pathlib.Path("C:\\Windows\\Esc").exists()
+            return "escape outside home blocked"
+        check("copyfolder containment guard", containment_guard)
+
+        def missing_source_is_friendly():
+            r = registry.dispatch("copy_folder",
+                {"source": "jarvis_copyfolder_smoke/ghost", "dest": "x"})
+            assert "can't find" in r, r
+            return "missing source is a friendly message"
+        check("copyfolder missing source", missing_source_is_friendly)
+
+        def size_cap_refuses_before_copying():
+            # temporarily lower the file-count cap so we don't create thousands
+            # of files; the copy must be REFUSED and nothing written.
+            mkfile("Big/1.txt"); mkfile("Big/2.txt"); mkfile("Big/3.txt")
+            saved = org.MAX_COPY_FILES
+            org.MAX_COPY_FILES = 2
+            try:
+                r = registry.dispatch("copy_folder",
+                    {"source": "jarvis_copyfolder_smoke/Big",
+                     "dest": "jarvis_copyfolder_smoke/BigCopy"})
+            finally:
+                org.MAX_COPY_FILES = saved
+            assert "too many files" in r, r
+            assert not (sandbox / "BigCopy").exists(), "copied despite size cap"
+            return "over-cap folder refused, nothing written"
+        check("copyfolder size cap", size_cap_refuses_before_copying)
+
+        def output_is_ascii():
+            mkdir("Asc")
+            registry.dispatch("copy_folder",
+                {"source": "jarvis_copyfolder_smoke/Asc",
+                 "dest": "jarvis_copyfolder_smoke/AscCopy"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("copyfolder ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # empty / missing args -> friendly error, never a crash
+            assert "Error" in registry.dispatch("copy_folder", {"source": "", "dest": "x"})
+            assert "Error" in registry.dispatch("copy_folder", {"source": "a", "dest": ""})
+            assert "Error" in registry.dispatch("copy_folder", {})
+            # wrong types must not raise
+            registry.dispatch("copy_folder", {"source": 123, "dest": 456})
+            registry.dispatch("copy_folder", {"source": ["a"], "dest": {}})
+            return "guards held"
+        check("copyfolder hallucination guards", hallucination_guards)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -2139,7 +2299,7 @@ def t_e2e():
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
-            "movefolder": t_movefolder,
+            "movefolder": t_movefolder, "copyfolder": t_copyfolder,
             "makefolder": t_makefolder, "disk": t_disk, "explorer": t_explorer,
             "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
@@ -2156,7 +2316,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_movefolder(); t_makefolder(); t_disk(); t_explorer()
+        t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder(); t_disk(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()

@@ -342,12 +342,44 @@ make_folder.
   home-folder, alt arg names, containment, missing source, ASCII-only, and the
   empty/missing/wrong-type guards. Full safe set: 150 checks, all PASS.
 
+## 2026-07-30 — Copy a whole folder (Phase 27)
+
+Added `copy_folder` (`jarvis/tools/organize.py`, alongside move_file/copy_file/
+make_folder/move_folder): the organise family could COPY a single file and MOVE a
+whole folder, but not copy a whole folder. Now Jarvis can duplicate an entire tree
+("copy my Taxes folder into Backups", "duplicate my Projects folder"). The natural
+partner to move_folder and the backup counterpart to copy_file. Closes the
+"copy_folder counterpart to move_folder, bounded on size/count" item in Future work.
+- `source` (the folder) + `dest` (a folder to copy INTO, or a bare new name/path
+  to name the copy). The original is always left in place.
+- Reuses `organize._resolve_folder_pair` (parametrised so a FILE source now points
+  at copy_file, not move_file) -> `_resolve_under_home`: BOTH source AND dest must
+  be inside home; home folder never copied; never overwrites/merges an existing
+  dest; **never copies a folder into its own subfolder** (`src in target.parents`);
+  dest depth capped (`MAX_NEW_DEPTH`, 12).
+- **Bounded on size/count** (unlike a move, a copy duplicates bytes): the tree is
+  pre-measured by `_measure_tree` (nothing pruned, so caps are honest) and REFUSED
+  before writing anything if over `MAX_COPY_FILES` (5000), `MAX_COPY_TREE_BYTES`
+  (500 MB), walk depth, or a wall-clock budget. On any copy error the partial copy
+  is rmtree'd (target never existed before us, so only our own bytes are cleared).
+  Success reports the file count + total size. Alt arg names, wrong-type/empty/
+  missing args coerced or rejected, output pure ASCII. Never raises.
+- Auto-registers via the already-present `organize` import in `app.py`; wired into
+  the agent system prompt (copy_folder for a whole folder vs copy_file for one
+  file) and the console "Try:" line ("copy my taxes folder into backups").
+- `tests/smoke.py copyfolder` (safe set): copy-into-folder (original kept),
+  rename-in-place + count/size report, never-overwrite/merge, refuse-into-own-
+  subfolder, refuse-file-source (points at copy_file), refuse-home-folder, alt arg
+  names, containment, missing source, the size/count cap (nothing written when
+  over cap), ASCII-only, and the empty/missing/wrong-type guards. Full safe set:
+  162 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 26 that is 51 without browser, 57 with. No tools are being silently
+after Phase 27 that is 52 without browser, 58 with. No tools are being silently
 dropped.
 
 ## How to test (in order)
