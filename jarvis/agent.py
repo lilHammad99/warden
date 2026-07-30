@@ -36,6 +36,9 @@ Rules:
 - For questions about this PC's network or running programs (IP address,
   whether the internet is up, what's running), use run_command with a safe
   command like ipconfig, ping, or tasklist.
+- Math: for ANY arithmetic or calculation (sums, percentages, roots, etc.),
+  call calculate with the expression instead of working it out yourself; it is
+  always exact, and your own mental math is not.
 - To-do list: when the user asks to add/track something to do ("remind me to",
   "add ... to my list", "I need to"), call add_task. To show it call
   list_tasks; to check something off call complete_task; to delete call

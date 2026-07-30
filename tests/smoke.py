@@ -1,5 +1,5 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
-Sections: imports, tools, memory, shell, find, clipboard, tasks, agent,
+Sections: imports, tools, memory, shell, find, clipboard, tasks, calc, agent,
 camera, vision, tts, hud, watch, e2e, all (default: safe set)
 """
 
@@ -23,7 +23,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, camera, clipboard, files, find, memory, registry, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, browser, calc, camera, clipboard, files, find, memory, registry, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -344,6 +344,56 @@ def t_tasks():
     check("tasks corrupt-store recovery", corrupt_store_recovers)
 
 
+def t_calc():
+    """Exercises the calculate tool + its defenses against 8B hallucinations.
+    No model needed, so it lives in the safe set."""
+    from jarvis.tools import calc  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    def happy_path():
+        assert registry.dispatch("calculate", {"expression": "2 + 2"}).endswith("4")
+        assert registry.dispatch("calculate", {"expression": "(1250 * 1.2) / 3"}).endswith("500")
+        assert registry.dispatch("calculate", {"expression": "3 ** 2"}).endswith("9")
+        assert registry.dispatch("calculate", {"expression": "sqrt(144)"}).endswith("12")
+        assert registry.dispatch("calculate", {"expression": "15/100 * 240"}).endswith("36")
+        return "arithmetic + functions ok"
+    check("calc happy path", happy_path)
+
+    def constants_and_rounding():
+        out = registry.dispatch("calculate", {"expression": "round(pi, 2)"})
+        assert "3.14" in out, out
+        # a whole-valued float renders as an int, not '12.0'
+        assert registry.dispatch("calculate", {"expression": "10 / 2"}).endswith("5")
+        return "constants + rounding ok"
+    check("calc constants and formatting", constants_and_rounding)
+
+    def rejects_code_execution():
+        # hallucinated code-injection attempts must be refused, never run
+        for evil in ("__import__('os').system('dir')", "open('x','w')",
+                     "1 if True else 2", "[i for i in range(9)]",
+                     "os.getcwd()", "eval('2+2')", "pi.__class__"):
+            r = registry.dispatch("calculate", {"expression": evil})
+            assert "Error" in r, f"{evil!r} not refused: {r}"
+        return "code execution refused"
+    check("calc rejects code", rejects_code_execution)
+
+    def bounds_and_guards():
+        # divide by zero -> friendly, not a crash
+        assert "zero" in registry.dispatch("calculate", {"expression": "1/0"})
+        # runaway power / factorial are capped, not hung
+        assert "Error" in registry.dispatch("calculate", {"expression": "9 ** 9 ** 9"})
+        assert "Error" in registry.dispatch("calculate", {"expression": "factorial(999999)"})
+        # over-long expression is rejected, not evaluated
+        assert "too long" in registry.dispatch("calculate", {"expression": "1+" * 400 + "1"})
+        # empty / missing / wrong-type args must not crash
+        assert "Error" in registry.dispatch("calculate", {"expression": ""})
+        assert "Error" in registry.dispatch("calculate", {})
+        registry.dispatch("calculate", {"expression": 123})  # coerced, no raise
+        assert "Error" in registry.dispatch("calculate", {"expression": "2 +"})
+        return "bounds + guards held"
+    check("calc bounds and guards", bounds_and_guards)
+
+
 def t_agent():
     from jarvis import config as c
     from jarvis.agent import Agent
@@ -444,9 +494,9 @@ def t_e2e():
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "clipboard": t_clipboard,
-            "tasks": t_tasks, "agent": t_agent, "camera": t_camera,
-            "vision": t_vision, "tts": t_tts, "hud": t_hud, "watch": t_watch,
-            "e2e": t_e2e}
+            "tasks": t_tasks, "calc": t_calc, "agent": t_agent,
+            "camera": t_camera, "vision": t_vision, "tts": t_tts,
+            "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "safe"
@@ -455,7 +505,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_clipboard()
-        t_tasks()
+        t_tasks(); t_calc()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

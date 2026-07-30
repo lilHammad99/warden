@@ -107,6 +107,26 @@
       dedup, number-vs-text selection, the hallucination guards, and
       corrupt-store recovery
 
+### Phase 11 — Exact calculator (2026-07-30)
+- [x] `calculate` tool (`jarvis/tools/calc.py`): the 8B model is unreliable at
+      arithmetic, so this lets it compute exactly instead of guessing ("what is
+      15% of 240", "(1250 * 1.2) / 3", "sqrt(2)") — an accuracy/autonomy win
+- [x] NO eval/exec: the expression is parsed to an AST and walked by hand, so
+      only numbers, arithmetic operators, an allowlist of math functions
+      (sqrt/sin/cos/log/round/min/max/factorial/...) and the constants pi/e/tau
+      are permitted — a hallucinated `__import__('os').system('del *')` is
+      refused, never run
+- [x] Hardened vs 8B hallucinations: sizes capped (expression length, AST node
+      count, power exponent, factorial arg) so `9**9**9` / `factorial(999999)`
+      can't hang or exhaust memory; wrong-type args coerced; divide-by-zero,
+      domain errors, syntax errors and overflow all return a friendly string —
+      never crashes the agent
+- [x] Agent system prompt now tells the model to use `calculate` for any math
+- [x] Console startup adds a clean ASCII separator rule and a calculator
+      example in the "Try:" line (pure ASCII)
+- [x] `tests/smoke.py calc` (in the safe set) covers arithmetic, functions,
+      constants, code-injection refusal, and the size/overflow guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.

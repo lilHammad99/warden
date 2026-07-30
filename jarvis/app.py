@@ -28,6 +28,7 @@ def main():
 
     # importing tool modules registers their tools
     from .tools import apps, files, system, web  # noqa: F401
+    from .tools import calc  # noqa: F401
     from .tools import camera  # noqa: F401
     from .tools import clipboard  # noqa: F401
     from .tools import find  # noqa: F401
@@ -71,16 +72,19 @@ def main():
     n_todo = task_list.open_count()
     todo_status = f"{n_todo} open task{'s' if n_todo != 1 else ''}" if n_todo else "clear"
     print(BANNER)
+    rule = "-" * 64
+    print(rule)
     print(f"model: {cfg['models']['chat']} | vision: {cfg['models']['vision']}"
           f" | voice: {voice_status} | browser tools: {'on' if browser_ok else 'off'}")
     print(f"memory: {mem_status} | to-do: {todo_status}"
           f"  ({len(registry.specs())} tools online)")
+    print(rule)
     print(_greeting())
     if n_todo:
         print(f"Reminder: you have {n_todo} thing{'s' if n_todo != 1 else ''} "
               "on your to-do list. Say 'what's on my list' to hear it.")
-    print("Type your command ('exit' to quit). Try: add milk to my to-do list / "
-          "start working / find my resume / what do you see\n")
+    print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
+          "add milk to my to-do list / find my resume / what do you see\n")
 
     while True:
         try:
