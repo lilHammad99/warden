@@ -898,6 +898,48 @@
       file source + missing folder, ASCII-only output, and the wrong-type / extra-arg
       guards
 
+### Phase 34 — Facts about a single file (2026-07-31)
+- [x] `file_info` tool (`jarvis/tools/fileinfo.py`): the file family could LOCATE a
+      file, REARRANGE it, back it up / restore it, remove it, measure a whole
+      FOLDER (`folder_size`) and find files stored twice (`find_duplicates`) -- but
+      "tell me about THIS file" was unanswerable. An 8B model guesses (wrongly) at a
+      file's size and dates and cannot compute a checksum at all, so `file_info`
+      reports the EXACT facts instead ("how big is this file exactly", "when did I
+      create this", "when did I last change my resume", "is this file read-only",
+      "what's the checksum of this download"). Same philosophy as `calculate` /
+      `convert_units` / `count_words`: a real number, not a hallucination. Read-only,
+      the natural companion to `find_files` (locate, then describe)
+- [x] Reports the type (friendly label from the extension), the exact size (human
+      size + byte count), the created and last-modified dates (each with a human
+      "how long ago" phrase, reusing `recent_files`' `_ago`), the read-only flag
+      (real Windows attribute, falling back to a write probe), a line + word count
+      for text files, and the SHA-256 checksum so the user can verify a download
+- [x] Pure standard library (`hashlib`, `os.stat`), NO new dependency
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      path outside home -- including a `..`-escape, resolved and re-checked -- is
+      REJECTED, so Jarvis can never read a file under `C:\Windows`. A FOLDER is
+      refused and the model is steered to `folder_size`
+- [x] Bounded: the checksum is streamed and skipped (with a note) for a file over
+      `MAX_HASH_BYTES` (400 MB) so a giant file can't hang the agent; the line/word
+      count reads at most `MAX_TEXT_BYTES` (20 MB) and notes a partial count;
+      line/word counts are only attempted for text (binary by extension OR a
+      NUL-byte sniff is not counted)
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`file`/`source`/`document`/`doc`/...), a
+      missing file surfaced as a friendly message, all output forced to pure ASCII
+      -- never raises, never changes anything (read-only)
+- [x] Auto-registers via a new `fileinfo` import in `app.py`; the agent system
+      prompt steers "facts about ONE specific file" to `file_info` (vs `folder_size`
+      for a whole folder); the console "Try:" line suggests "tell me about my
+      resume.docx"
+- [x] `tests/smoke.py fileinfo` (in the safe set) covers the exact type/size/line
+      count/date/checksum facts (checksum verified against `hashlib`), a binary file
+      getting no line count, an empty file, the read-only flag, alt arg names, the
+      checksum size cap and the text-read cap (both via a temporary cap shrink), the
+      containment guard (absolute AND `..`-escape), a folder source steered to
+      folder_size, a missing file, ASCII-only output, and the empty/missing/
+      wrong-type guards. Full safe set: 243 checks, all PASS
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -975,6 +1017,11 @@
       then `hashlib.blake2b`, so identical names aren't required), read-only, reports
       reclaimable space + points at recycle_file, home-contained, pruned + bounded
       (files hashed / per-file size / total bytes / wall-clock), ignores empty files
+- [x] File management: report the exact facts about a single file -- done in
+      Phase 34 (`file_info`); pure stdlib (no dep), read-only, reports type / exact
+      size / created + modified dates / read-only flag / line + word count (text) /
+      SHA-256 checksum; home-contained, bounded (checksum + text-read caps), folder
+      source steered to folder_size, ASCII-only
 - [ ] Structured data next: an Excel `.xlsx` reader (needs a dependency like
       openpyxl, which is NOT currently installed) so "how many rows in my
       workbook.xlsx" / "read sheet 2" works; read_csv already tells the user to

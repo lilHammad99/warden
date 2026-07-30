@@ -44,6 +44,7 @@ def main():
     from .tools import duplicates  # noqa: F401
     from .tools import explorer  # noqa: F401
     from .tools import extract  # noqa: F401
+    from .tools import fileinfo  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import jsondata  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
@@ -143,6 +144,7 @@ def main():
           "copy my taxes folder into backups / "
           "how big is my downloads folder / "
           "find duplicate files in my downloads / "
+          "tell me about my resume.docx / "
           "open my downloads folder / "
           "back up my documents into a zip / unzip my backup / "
           "delete that old draft to the recycle bin / "

@@ -567,12 +567,43 @@ anything twice", "what duplicates are in my Downloads", "clean up duplicate phot
   file source + missing folder, ASCII-only, and the wrong-type/extra-arg guards. Full
   safe set: 232 checks, all PASS.
 
+## 2026-07-31 — Facts about a single file (Phase 34)
+
+Added `file_info` (`jarvis/tools/fileinfo.py`): the file family could measure a
+whole FOLDER (`folder_size`) and spot files stored twice (`find_duplicates`) but
+"tell me about THIS file" was unanswerable. An 8B model guesses a file's size and
+dates and can't compute a checksum, so this reports the EXACT facts -- same
+philosophy as calculate/convert_units/count_words. Answers "how big is this file
+exactly", "when did I create/last change this", "is this file read-only",
+"what's the checksum of this download". Read-only; partners with find_files.
+- Reports type (friendly label from the extension), exact size (human + bytes),
+  created + modified dates (each with a human "how long ago" phrase, reusing
+  recent_files' `_ago`), read-only flag (real Windows `st_file_attributes`, else a
+  write probe), a line + word count for TEXT files (binary by extension OR a
+  NUL-byte sniff isn't counted), and the SHA-256 checksum. Pure stdlib (`hashlib`,
+  `os.stat`), NO new dependency.
+- Reuses `organize._resolve_under_home` for containment (a path outside home, incl.
+  a `..`-escape, is REJECTED -> can't read `C:\Windows`); a FOLDER is refused and
+  steered to `folder_size`. Bounded: checksum streamed and skipped with a note over
+  `MAX_HASH_BYTES` (400 MB); line/word count reads at most `MAX_TEXT_BYTES` (20 MB)
+  and notes a partial count. Alt arg names (`file`/`source`/`document`/...),
+  wrong-type/empty/missing args coerced or rejected, output pure ASCII. Never raises.
+- Wired into `app.py` imports (`from .tools import fileinfo`) + the console "Try:"
+  line ("tell me about my resume.docx"), and the agent system prompt (file_info for
+  ONE file vs folder_size for a whole folder).
+- `tests/smoke.py fileinfo` (safe set): exact type/size/line-count/date/checksum
+  facts (checksum verified against `hashlib`), binary file gets no line count, empty
+  file, read-only flag, alt arg names, checksum size cap + text-read cap (temporary
+  cap shrink), containment (absolute + `..`-escape), folder source steered to
+  folder_size, missing file, ASCII-only, and the empty/missing/wrong-type guards.
+  Full safe set: 243 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 33 that is 58 without browser, 64 with. No tools are being silently
+after Phase 34 that is 59 without browser, 65 with. No tools are being silently
 dropped.
 
 ## How to test (in order)

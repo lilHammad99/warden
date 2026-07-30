@@ -135,7 +135,13 @@ Rules:
   find_duplicates with an optional folder; it compares file CONTENTS (so it
   catches identical copies with different names), is read-only, and reports how
   much space the extra copies waste. It never deletes anything -- tell the user
-  which copies exist and, if they want, remove one with recycle_file.
+  which copies exist and, if they want, remove one with recycle_file. To report
+  the exact facts about ONE specific file ("how big is this file exactly", "when
+  did I create this", "when did I last change my resume", "is this file
+  read-only", "what's the checksum of this download"), call file_info with the
+  file path; it is read-only and returns the type, exact size, created/modified
+  dates, read-only flag, line count for text, and the SHA-256 checksum. Use
+  file_info for a single file and folder_size for a whole folder.
 - Reminders/timers: when the user wants to be told something at a LATER time
   ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
   17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)

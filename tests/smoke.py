@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-movefolder, copyfolder, makefolder, duplicates, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
+movefolder, copyfolder, makefolder, duplicates, fileinfo, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, textstats, spreadsheet, jsondata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, duplicates, explorer, extract, files, find, jsondata, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, duplicates, explorer, extract, fileinfo, files, find, jsondata, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -1178,6 +1178,153 @@ def t_duplicates():
         check("find_duplicates hallucination guards", hallucination_guards)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_fileinfo():
+    """Exercises the file_info tool (exact facts about a single file) + its
+    defenses against 8B hallucinations. Read-only, works entirely inside a temp
+    tree in the user's home, so it is deterministic, needs no model, and lives
+    in the safe set."""
+    import hashlib
+    import os
+    import pathlib
+    import shutil
+    import stat as _stat
+    from jarvis.tools import fileinfo  # noqa: F401  (register file_info)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_fileinfo_smoke"
+
+    def _rm(_f, path, _e):  # so a read-only file can't block cleanup on Windows
+        try:
+            os.chmod(path, _stat.S_IWRITE)
+            os.remove(path)
+        except OSError:
+            pass
+
+    shutil.rmtree(sandbox, onerror=_rm, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    text_bytes = b"line one\nline two\nline three\n"           # 29 B, 3 lines, 6 words
+    (sandbox / "notes.txt").write_bytes(text_bytes)
+    (sandbox / "pic.bin").write_bytes(b"\x00\x01\x02BIN\x00data")  # NUL -> binary
+    (sandbox / "empty.dat").write_bytes(b"")
+    ro = sandbox / "locked.txt"
+    ro.write_bytes(b"read only please\n")
+    os.chmod(ro, _stat.S_IREAD)                                # make it read-only
+
+    try:
+        def text_file_facts():
+            out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/notes.txt"})
+            assert "Error" not in out, out
+            assert out.splitlines()[0] == "notes.txt", out
+            assert "Type: text (.txt)" in out, out
+            assert "Size: 29 B (29 bytes)" in out, out       # exact byte count
+            assert "Lines: 3  Words: 6" in out, out          # exact, not guessed
+            assert "Modified:" in out and "Created:" in out, out
+            assert "Read-only: no" in out, out
+            # the checksum is REAL: matches hashlib over the same bytes
+            digest = hashlib.sha256(text_bytes).hexdigest()
+            assert f"SHA-256: {digest}" in out, out
+            return "type/size/lines/dates/checksum all exact"
+        check("file_info text file facts", text_file_facts)
+
+        def binary_has_no_line_count():
+            out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/pic.bin"})
+            assert "Error" not in out, out
+            assert "Lines:" not in out, "binary should not get a line/word count"
+            assert "SHA-256:" in out, out                    # still checksummed
+            return "binary file: no line count, still hashed"
+        check("file_info binary no line count", binary_has_no_line_count)
+
+        def empty_file():
+            out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/empty.dat"})
+            assert "Size: 0 B (0 bytes)" in out, out
+            assert "SHA-256: (empty file)" in out, out
+            assert "Lines:" not in out, out                  # nothing to count
+            return "empty file handled"
+        check("file_info empty file", empty_file)
+
+        def read_only_flag():
+            out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/locked.txt"})
+            assert "Read-only: yes" in out, out
+            return "read-only attribute reported"
+        check("file_info read-only flag", read_only_flag)
+
+        def alt_arg_names():
+            for key in ("file", "source", "document"):
+                out = registry.dispatch("file_info", {key: "jarvis_fileinfo_smoke/notes.txt"})
+                assert "Type: text (.txt)" in out, (key, out)
+            return "alt file/source/document arg names handled"
+        check("file_info alt arg names", alt_arg_names)
+
+        def checksum_size_cap():
+            # a file over the (temporarily tiny) hash cap is reported WITHOUT a hash
+            saved = fileinfo.MAX_HASH_BYTES
+            fileinfo.MAX_HASH_BYTES = 5           # notes.txt is 29 B > 5
+            try:
+                out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/notes.txt"})
+                assert "SHA-256: (skipped" in out, out
+                assert "over" in out, out
+            finally:
+                fileinfo.MAX_HASH_BYTES = saved
+            return "oversized file -> checksum skipped, not hung"
+        check("file_info checksum size cap", checksum_size_cap)
+
+        def text_count_cap():
+            # a file past the (temporarily tiny) text-read cap is noted as partial
+            saved = fileinfo.MAX_TEXT_BYTES
+            fileinfo.MAX_TEXT_BYTES = 4           # notes.txt is 29 B > 4
+            try:
+                out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/notes.txt"})
+                assert "first part only" in out, out
+            finally:
+                fileinfo.MAX_TEXT_BYTES = saved
+            return "over-long text -> counted first part, noted"
+        check("file_info text count cap", text_count_cap)
+
+        def containment_guard():
+            r = registry.dispatch("file_info", {"path": "C:\\Windows\\notepad.exe"})
+            assert "only work inside your own folders" in r, r
+            r2 = registry.dispatch("file_info",
+                {"path": "jarvis_fileinfo_smoke/../../../Windows/notepad.exe"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked"
+        check("file_info containment guard", containment_guard)
+
+        def folder_and_missing():
+            r = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke"})
+            assert "is a folder" in r and "folder_size" in r, r   # steered correctly
+            r2 = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/nope.txt"})
+            assert "can't find" in r2, r2
+            return "folder source steered + missing file friendly"
+        check("file_info folder/missing guards", folder_and_missing)
+
+        def output_is_ascii():
+            registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/notes.txt"}).encode("ascii")
+            registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/pic.bin"}).encode("ascii")
+            registry.dispatch("file_info", {"path": "C:\\Windows\\notepad.exe"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("file_info ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            assert "Error" in registry.dispatch("file_info", {"path": ""})   # empty
+            assert "Error" in registry.dispatch("file_info", {})             # missing arg
+            # wrong types / weird shapes must not raise
+            registry.dispatch("file_info", {"path": 123})
+            registry.dispatch("file_info", {"path": ["a"]})
+            registry.dispatch("file_info", {"path": {}})
+            registry.dispatch("file_info", {"path": None})
+            # an unexpected extra arg is dropped, the call still succeeds
+            out = registry.dispatch("file_info",
+                {"path": "jarvis_fileinfo_smoke/notes.txt", "reason": "curious"})
+            assert "Type: text (.txt)" in out, out
+            return "guards held"
+        check("file_info hallucination guards", hallucination_guards)
+    finally:
+        os.chmod(ro, _stat.S_IWRITE)  # let cleanup remove the read-only file
+        shutil.rmtree(sandbox, onerror=_rm, ignore_errors=True)
 
 
 def t_disk():
@@ -3151,6 +3298,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "recent": t_recent, "organize": t_organize,
             "movefolder": t_movefolder, "copyfolder": t_copyfolder,
             "makefolder": t_makefolder, "duplicates": t_duplicates,
+            "fileinfo": t_fileinfo,
             "disk": t_disk, "document": t_document,
             "explorer": t_explorer,
             "archive": t_archive,
@@ -3170,7 +3318,7 @@ if __name__ == "__main__":
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
         t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder()
-        t_duplicates(); t_disk()
+        t_duplicates(); t_fileinfo(); t_disk()
         t_document(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
