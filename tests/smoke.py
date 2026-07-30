@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
-dates, convert, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+dates, convert, textstats, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
 """
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, explorer, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, explorer, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -2450,6 +2450,135 @@ def t_e2e():
     camera.shutdown()
 
 
+def t_textstats():
+    """Exercises the count_words tool (exact word/char/line counting on text or
+    a file) + its defenses against 8B hallucinations. Builds a temp tree inside
+    the user's home; deterministic, needs no model, lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    import zipfile
+    from jarvis.tools import textstats as ts  # noqa: F401  (register count_words)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_words_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    # a plain-text file with a known word count
+    (sandbox / "essay.txt").write_text("one two three four five\n", encoding="utf-8")
+    # a real .docx (a zip of xml), reusing read_document's extractor
+    WNS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    xml = (f'<?xml version="1.0"?><w:document xmlns:w="{WNS}"><w:body>'
+           "<w:p><w:r><w:t>alpha beta gamma</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>delta</w:t></w:r></w:p></w:body></w:document>")
+    with zipfile.ZipFile(sandbox / "resume.docx", "w") as z:
+        z.writestr("word/document.xml", xml)
+    (sandbox / "a.pdf").write_bytes(b"%PDF-1.4 not really")
+    (sandbox / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (sandbox / "blob.log").write_bytes(b"abc\x00def binary")  # NUL -> not text
+
+    saved_text_cap = ts.MAX_TEXT_LEN
+    try:
+        def counts_text():
+            out = registry.dispatch(
+                "count_words",
+                {"text": "Hello world. This is a test!\nSecond line here."})
+            assert "9 words" in out, out          # exact word count
+            assert "2 lines" in out, out          # line count
+            assert "3 sentences" in out, out      # rough sentence count
+            assert "Reading time" in out and "speaking aloud" in out, out
+            return "counted words/lines/sentences in text"
+        check("count_words counts text", counts_text)
+
+        def counts_plain_file():
+            out = registry.dispatch(
+                "count_words", {"path": "jarvis_words_smoke/essay.txt"})
+            assert "essay.txt" in out and "5 words" in out, out
+            return "counted a plain-text file"
+        check("count_words counts a plain-text file", counts_plain_file)
+
+        def counts_docx():
+            out = registry.dispatch(
+                "count_words", {"path": "jarvis_words_smoke/resume.docx"})
+            assert "resume.docx" in out and "4 words" in out, out
+            return "counted a Word .docx document"
+        check("count_words counts a docx", counts_docx)
+
+        def filename_in_text_field():
+            # a common 8B slip: the file name dropped into 'text' -> still counts
+            # the FILE, not the literal string
+            out = registry.dispatch(
+                "count_words", {"text": "jarvis_words_smoke/essay.txt"})
+            assert "essay.txt" in out and "5 words" in out, out
+            return "a filename in the text field is read as a file"
+        check("count_words filename-in-text", filename_in_text_field)
+
+        def refuses_pdf_and_binary():
+            pdf = registry.dispatch("count_words", {"path": "jarvis_words_smoke/a.pdf"})
+            assert "PDF" in pdf, pdf
+            png = registry.dispatch("count_words", {"path": "jarvis_words_smoke/pic.png"})
+            assert "isn't a text file" in png, png
+            nul = registry.dispatch("count_words", {"path": "jarvis_words_smoke/blob.log"})
+            assert "doesn't look like text" in nul, nul
+            return "pdf + binary + NUL-byte files refused"
+        check("count_words refuses non-text files", refuses_pdf_and_binary)
+
+        def containment_guard():
+            # a file outside the user's home must be refused, not read
+            r = registry.dispatch(
+                "count_words", {"path": "C:\\Windows\\System32\\drivers\\etc\\hosts"})
+            assert "only work inside your own folders" in r, r
+            return "escape outside home blocked"
+        check("count_words containment guard", containment_guard)
+
+        def folder_and_missing():
+            fol = registry.dispatch("count_words", {"path": "jarvis_words_smoke"})
+            assert "is a folder" in fol, fol
+            miss = registry.dispatch("count_words", {"path": "jarvis_words_smoke/ghost.txt"})
+            assert "can't find" in miss, miss
+            return "folder source + missing file are friendly messages"
+        check("count_words folder + missing", folder_and_missing)
+
+        def long_text_is_truncated():
+            ts.MAX_TEXT_LEN = 10            # temporarily tiny
+            out = registry.dispatch("count_words", {"text": "word " * 50})
+            assert "first part" in out, out
+            ts.MAX_TEXT_LEN = saved_text_cap
+            return "over-long text measured in part, not unbounded"
+        check("count_words long-text truncation", long_text_is_truncated)
+
+        def output_is_ascii():
+            # non-ASCII input must still yield pure-ASCII output (counts only)
+            registry.dispatch(
+                "count_words", {"text": "cafe resume naive expose budget"}).encode("ascii")
+            registry.dispatch(
+                "count_words", {"path": "jarvis_words_smoke/essay.txt"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("count_words ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # empty / whitespace / missing args -> friendly error, never a crash
+            assert "Error" in registry.dispatch("count_words", {})
+            assert "Error" in registry.dispatch("count_words", {"text": ""})
+            assert "Error" in registry.dispatch("count_words", {"text": "   "})
+            # wrong types must not raise
+            registry.dispatch("count_words", {"text": 123})
+            registry.dispatch("count_words", {"text": ["a", "b"]})
+            registry.dispatch("count_words", {"path": {}})
+            registry.dispatch("count_words", {"path": None, "text": None})
+            # an unexpected extra arg is dropped, the call still succeeds
+            out = registry.dispatch(
+                "count_words", {"text": "two words", "reason": "curious"})
+            assert "2 words" in out, out
+            return "guards held"
+        check("count_words hallucination guards", hallucination_guards)
+    finally:
+        ts.MAX_TEXT_LEN = saved_text_cap
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
@@ -2459,7 +2588,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
-            "convert": t_convert,
+            "convert": t_convert, "textstats": t_textstats,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
@@ -2475,7 +2604,8 @@ if __name__ == "__main__":
         t_document(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
-        t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
+        t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()
+        t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

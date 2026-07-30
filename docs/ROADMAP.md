@@ -681,6 +681,45 @@
       (absolute AND `..`-escape), folder + missing guards, the xml/size caps, the
       truncation note, and the empty/missing/wrong-type guards
 
+### Phase 29 — Count words / measure text (2026-07-30)
+- [x] `count_words` tool (`jarvis/tools/textstats.py`): a productivity & text-
+      handling tool, a different category from the folder-ops family. The 8B
+      model is genuinely bad at counting -- ask it "how many words is my essay"
+      or "is my cover letter under 300 words" and it guesses, usually wrong. This
+      measures text EXACTLY -- words, characters, characters-without-spaces,
+      lines, a rough sentence count, plus estimated reading and speaking-aloud
+      time -- so Jarvis answers length questions the way `calculate` answers
+      arithmetic: with a real number, not a hallucination. An accuracy/autonomy
+      win that rounds out the exact-computation family and pairs with
+      `find_files`/`read_document` (locate the essay, then size it up)
+- [x] Measures EITHER text passed directly ("count the words in this: ...") OR a
+      file: a plain-text file (.txt/.md/.csv/...) read straight, or a Word (.docx)
+      / OpenDocument (.odt) document whose real text is pulled out by REUSING
+      `read_document`'s extractor (no duplicated parsing, no new dependency). A
+      file name the model drops into the `text` field by mistake is detected and
+      read as a file, so "count the words in essay.txt" still works
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      file path outside home -- including a `..`-escape -- is REJECTED, so it can
+      never read a file from `C:\Windows`
+- [x] Bounded everywhere: directly-passed text is capped (measured in part with a
+      note if over), an over-large file is refused before reading, and the
+      document extractor is already zip-bomb bounded -- a giant input can't
+      exhaust memory. A PDF is steered to "not yet", and a binary file (by
+      extension AND a NUL-byte sniff) is refused rather than counting garbage
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`text`/`content`/`string`/`body` and
+      `path`/`file`/`document`/`source`/...), a folder source and a missing file
+      surface as friendly messages, output forced to pure ASCII (counts + an
+      ASCII-forced file name only) -- never raises, never changes anything
+- [x] Auto-registers via a new `textstats` import in `app.py`; the agent system
+      prompt steers "how many words / how long is this" to `count_words`; the
+      console "Try:" line suggests "how many words is my essay.txt"
+- [x] `tests/smoke.py textstats` (in the safe set) covers counting text (words,
+      lines, sentences, reading time), a plain-text file, a real `.docx`, the
+      filename-in-text detection, refusing PDF + binary + NUL-byte files, the
+      containment guard, a folder source + missing file, the over-long-text
+      truncation, ASCII-only output, and the empty/missing/wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -738,6 +777,10 @@
 - [x] Document reading: read Word `.docx` / OpenDocument `.odt` documents (not
       just plain text) -- done in Phase 28 (`read_document`); pure stdlib (no dep),
       home-contained, zip-bomb bounded, ASCII-transliterated
+- [x] Productivity / text handling: count words / measure text length -- done in
+      Phase 29 (`count_words`); exact word/char/line/sentence counts + reading &
+      speaking time, on pasted text OR a plain-text/Word/ODT file; home-contained,
+      bounded, reuses read_document's extractor, ASCII-only
 - [ ] Document reading next: a PDF reader (needs a dependency like pypdf, which is
       NOT currently installed) so "read my resume.pdf"/"summarise this PDF" works;
       read_document already tells the user PDFs aren't supported yet. Same

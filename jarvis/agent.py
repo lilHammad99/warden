@@ -44,6 +44,12 @@ Rules:
 - Math: for ANY arithmetic or calculation (sums, percentages, roots, etc.),
   call calculate with the expression instead of working it out yourself; it is
   always exact, and your own mental math is not.
+- Counting words/length: for ANY question about how long a piece of text is or
+  how many words/characters it has ("how many words is my essay", "is this under
+  300 words", "word count of my resume"), call count_words instead of counting
+  yourself; it is exact. Pass text for words the user gave you directly, or path
+  for a file (a plain-text file, or a Word .docx / OpenDocument .odt document;
+  find it with find_files first if you don't have the path).
 - Unit conversions: for ANY "convert X to Y" (miles to km, C to F, kg to lb,
   cups to ml, mph to km/h, GB to MB, etc.), call convert_units with value,
   from_unit and to_unit instead of guessing; it is always exact.

@@ -405,12 +405,42 @@ to `find_files` (locate, then read).
   temporary cap shrink), the truncation note, and the empty/missing/wrong-type
   guards. Full safe set: 174 checks, all PASS.
 
+## 2026-07-30 — Count words / measure text (Phase 29)
+
+Added `count_words` (`jarvis/tools/textstats.py`): a productivity & text-handling
+tool, a DIFFERENT category from the well-covered folder-ops family. The 8B model
+guesses (wrongly) at "how many words is my essay" / "is this under 300 words";
+this measures text EXACTLY -- words, characters, characters-without-spaces, lines,
+a rough sentence count, plus reading- and speaking-time estimates -- the way
+`calculate` handles arithmetic. Rounds out the exact-computation family and pairs
+with `find_files`/`read_document` (locate the essay, then size it up).
+- Measures EITHER text passed directly OR a file: plain text (.txt/.md/...) read
+  straight, or a Word `.docx` / OpenDocument `.odt` document whose text is pulled
+  out by REUSING `read_document`'s extractor (`_extract_docx`/`_extract_odt`/
+  `_ascii_body`/`_tidy`) -- no duplicated parsing, no new dependency. A file name
+  the model drops into the `text` field is detected (single token, no spaces, has
+  a separator/real extension) and read as a file.
+- Reuses `organize._resolve_under_home` for containment (a path outside home,
+  incl. a `..`-escape, is REJECTED). Bounded: directly-passed text capped
+  (measured in part + noted if over), file-on-disk cap, binary refused (extension
+  allowlist AND NUL-byte sniff), PDF steered to "not yet". Output pure ASCII
+  (counts + ASCII-forced file name only). Alt arg names, wrong-type/empty/missing
+  coerced or rejected. Never raises.
+- Wired into `app.py` imports (`from .tools import textstats`) + the console
+  "Try:" line ("how many words is my essay.txt"), and the agent system prompt
+  (count_words for "how many words / how long is this", exact not guessed).
+- `tests/smoke.py textstats` (safe set): counts text (words/lines/sentences/
+  reading time), a plain-text file, a real `.docx`, the filename-in-text
+  detection, PDF + binary + NUL-byte refusal, containment, folder + missing
+  guards, over-long-text truncation, ASCII-only, and the empty/missing/wrong-type
+  guards. Full safe set: 184 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 28 that is 53 without browser, 59 with. No tools are being silently
+after Phase 29 that is 54 without browser, 60 with. No tools are being silently
 dropped.
 
 ## How to test (in order)
