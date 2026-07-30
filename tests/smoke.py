@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-clipboard, tasks, calc, dates, convert, reminders, dispatch, agent, camera,
-vision, tts, hud, watch, e2e, all (default: safe set)
+archive, clipboard, tasks, calc, dates, convert, reminders, dispatch, agent,
+camera, vision, tts, hud, watch, e2e, all (default: safe set)
 """
 
 import sys
@@ -24,7 +24,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, calc, camera, clipboard, convert, dates, files, find, memory, organize, recent, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, files, find, memory, organize, recent, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -629,6 +629,157 @@ def t_organize():
     finally:
         org.MAX_COPY_BYTES = saved_cap
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_archive():
+    """Exercises the zip_files tool (backup/archive) + its defenses against 8B
+    hallucinations. Works entirely inside a temp tree in the user's home (the
+    only place it touches), so it is deterministic, needs no model, and lives in
+    the safe set."""
+    import os
+    import pathlib
+    import shutil
+    import zipfile
+    from jarvis.tools import archive as arc  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_archive_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    (sandbox / "sub").mkdir(parents=True, exist_ok=True)
+
+    def mk(rel, text="x"):
+        p = sandbox / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    mk("a.txt", "hello")
+    mk("sub/b.txt", "world")
+    # a pruned dir whose file must NOT be swept into the archive
+    (sandbox / "node_modules").mkdir(exist_ok=True)
+    (sandbox / "node_modules" / "junk.txt").write_text("junk", encoding="utf-8")
+
+    saved_total = arc.MAX_TOTAL_BYTES
+
+    def _zpath(name):
+        return home / name
+
+    try:
+        def zip_a_folder():
+            out = registry.dispatch("zip_files",
+                {"sources": "jarvis_archive_smoke", "dest": "jarvis_archive_bk.zip"})
+            assert "Backed up" in out, out
+            z = _zpath("jarvis_archive_bk.zip")
+            assert z.exists(), "archive not created"
+            with zipfile.ZipFile(z) as zf:
+                names = zf.namelist()
+            # both real files present; node_modules pruned; original stays put
+            assert any(n.endswith("a.txt") for n in names), names
+            assert any(n.endswith("b.txt") for n in names), names
+            assert not any("junk.txt" in n for n in names), f"noise dir not pruned: {names}"
+            assert (sandbox / "a.txt").exists(), "original vanished"
+            z.unlink()
+            return "zipped a folder, pruned noise, originals kept"
+        check("archive zip folder", zip_a_folder)
+
+        def zip_several_files():
+            # a comma-separated list of files is accepted
+            out = registry.dispatch("zip_files",
+                {"sources": "jarvis_archive_smoke/a.txt, jarvis_archive_smoke/sub/b.txt",
+                 "dest": "two_files"})   # missing .zip suffix is added
+            assert "Backed up 2 files" in out, out
+            z = _zpath("two_files.zip")
+            assert z.exists(), "archive not created / .zip suffix not added"
+            z.unlink()
+            return "zipped several files, .zip suffix added"
+        check("archive zip several files", zip_several_files)
+
+        def alt_arg_names():
+            # the model may use 'files'/'to' instead of sources/dest
+            out = registry.dispatch("zip_files",
+                {"files": "jarvis_archive_smoke/a.txt", "to": "alt_backup.zip"})
+            assert "Backed up" in out, out
+            _zpath("alt_backup.zip").unlink()
+            return "alt files/to arg names handled"
+        check("archive alt arg names", alt_arg_names)
+
+        def never_overwrites():
+            z = _zpath("keep.zip")
+            z.write_text("existing", encoding="utf-8")
+            out = registry.dispatch("zip_files",
+                {"sources": "jarvis_archive_smoke/a.txt", "dest": "keep.zip"})
+            assert "won't overwrite" in out, out
+            assert z.read_text(encoding="utf-8") == "existing", "clobbered!"
+            z.unlink()
+            return "refuses to overwrite an existing archive"
+        check("archive never overwrites", never_overwrites)
+
+        def containment_guard():
+            # a source outside home is skipped, a dest outside home is refused
+            src = registry.dispatch("zip_files",
+                {"sources": "C:\\Windows\\notepad.exe", "dest": "w.zip"})
+            assert "nothing to back up" in src, src
+            assert not _zpath("w.zip").exists()
+            dst = registry.dispatch("zip_files",
+                {"sources": "jarvis_archive_smoke/a.txt", "dest": "C:\\Windows\\x.zip"})
+            assert "only work inside your own folders" in dst, dst
+            return "escape outside home blocked (source + dest)"
+        check("archive containment guard", containment_guard)
+
+        def size_cap():
+            arc.MAX_TOTAL_BYTES = 4              # temporarily tiny
+            mk("big.txt", "0123456789")          # 10 bytes > 4
+            out = registry.dispatch("zip_files",
+                {"sources": "jarvis_archive_smoke/big.txt", "dest": "big.zip"})
+            # the only file exceeds the cap -> nothing to back up, no archive
+            assert "nothing to back up" in out or "too big" in out, out
+            assert not _zpath("big.zip").exists()
+            arc.MAX_TOTAL_BYTES = saved_total
+            return "oversized backup refused, no partial archive"
+        check("archive size cap", size_cap)
+
+        def output_is_ascii():
+            registry.dispatch("zip_files",
+                {"sources": "jarvis_archive_smoke/a.txt", "dest": "ascii_bk.zip"}).encode("ascii")
+            p = _zpath("ascii_bk.zip")
+            if p.exists():
+                p.unlink()
+            return "output stayed pure ASCII"
+        check("archive ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # empty / missing args -> friendly error, never a crash, no archive
+            assert "Error" in registry.dispatch("zip_files", {"sources": "", "dest": "x.zip"})
+            assert "Error" in registry.dispatch("zip_files", {"sources": "jarvis_archive_smoke", "dest": ""})
+            assert "Error" in registry.dispatch("zip_files", {})
+            # a non-existent source is a friendly message, not a crash
+            miss = registry.dispatch("zip_files",
+                {"sources": "jarvis_archive_smoke/ghost.txt", "dest": "g.zip"})
+            assert "nothing to back up" in miss, miss
+            assert not _zpath("g.zip").exists()
+            # wrong types must not raise
+            registry.dispatch("zip_files", {"sources": 123, "dest": 456})
+            registry.dispatch("zip_files", {"sources": ["a"], "dest": {}})
+            # a list source shape is accepted (JSON array from the model)
+            out = registry.dispatch("zip_files",
+                {"sources": ["jarvis_archive_smoke/a.txt"], "dest": "listshape.zip"})
+            assert "Backed up" in out, out
+            _zpath("listshape.zip").unlink()
+            return "guards held"
+        check("archive hallucination guards", hallucination_guards)
+    finally:
+        arc.MAX_TOTAL_BYTES = saved_total
+        shutil.rmtree(sandbox, ignore_errors=True)
+        for leftover in ("jarvis_archive_bk.zip", "two_files.zip", "alt_backup.zip",
+                         "keep.zip", "w.zip", "x.zip", "g.zip", "big.zip",
+                         "456.zip", "ascii_bk.zip", "listshape.zip"):
+            p = home / leftover
+            if p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
 
 def t_clipboard():
@@ -1240,7 +1391,8 @@ def t_e2e():
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
-            "recent": t_recent, "organize": t_organize, "clipboard": t_clipboard,
+            "recent": t_recent, "organize": t_organize, "archive": t_archive,
+            "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
@@ -1254,7 +1406,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_clipboard()
+        t_recent(); t_organize(); t_archive(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

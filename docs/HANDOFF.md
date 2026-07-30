@@ -158,6 +158,38 @@ budget into Documents", "rename my resume to CV.pdf", "make a copy of my notes")
   empty/missing/wrong-type guards). Full safe set: 44 tools (50 with browser),
   all PASS.
 
+## 2026-07-30 — Back up / archive files (Phase 20)
+
+Added `zip_files` (`jarvis/tools/archive.py`): the backup member of the file
+tools. find/search/recent LOCATE a file and move/copy REARRANGE it; this bundles
+files up so the user can back them up or send them on ("back up my Documents into a
+zip", "zip my resume and cv", "make an archive of the report"). Originals stay
+put.
+- Zips a single file, several files (list OR comma/newline string), or a whole
+  folder (walked, `_SKIP_DIRS` pruned); entries stored relative to home so no
+  absolute path leaks. Reuses `organize._resolve_under_home` so BOTH every
+  source AND the destination `.zip` must live inside home -- can't read
+  `C:\Windows` or write outside the user's folders.
+- Never overwrites an existing `.zip`; missing `.zip` suffix added; written to a
+  `.part` temp then `os.replace`-d in (atomic, no half-written archive). Bounded:
+  5000 files / 500 MB uncompressed / depth / wall-clock caps; unreadable files
+  skipped + counted. Forgiving arg names (`files`/`paths`/`from`/`to`/`name`/...)
+  and list-shaped sources. Pure ASCII out. Never raises.
+- Wired into `app.py` imports + the console "Try:" line, and the agent system
+  prompt (zip_files after the move/copy bullet).
+- `tests/smoke.py archive` added to the safe set (zip-a-folder with noise pruned
+  + originals kept, zip-several-files + auto `.zip` suffix, alt arg names,
+  never-overwrite, containment for source AND dest, total-size cap with no
+  partial archive, ASCII-only, and the empty/missing/wrong-type/list-shape
+  guards). Full safe set: 51 tools with browser (45 without), all PASS.
+
+Tool-count note (the 48/44 fluctuation): NOT a registry bug. The registry holds
+exactly one entry per `@tool`-decorated function -- verified: 51 registered ==
+51 decorators defined (was 50 before this phase). The printed number only swings
+on whether the OPTIONAL `browser` module imports at count time (it adds 6:
+45 without it, 51 with). The earlier "48" was a stale figure from before recent
+tools existed. No tools are being silently dropped.
+
 ## How to test (in order)
 
 ```

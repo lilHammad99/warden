@@ -33,6 +33,7 @@ def main():
 
     # importing tool modules registers their tools
     from .tools import apps, files, system, web  # noqa: F401
+    from .tools import archive  # noqa: F401
     from .tools import calc  # noqa: F401
     from .tools import camera  # noqa: F401
     from .tools import clipboard  # noqa: F401
@@ -124,6 +125,7 @@ def main():
           "how many days until christmas / add milk to my to-do list / "
           "find my resume / which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "
+          "back up my documents into a zip / "
           "actually my wifi password changed to hunter2\n")
 
     while True:

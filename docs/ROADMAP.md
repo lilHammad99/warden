@@ -348,6 +348,44 @@
       names, the containment guard, missing-source + folder-source messages, the
       copy size cap, ASCII-only output, and the empty/missing/wrong-type guards
 
+### Phase 20 — Back up / archive files (2026-07-30)
+- [x] `zip_files` tool (`jarvis/tools/archive.py`): the backup member of the
+      file tools. The navigation family (`find_files` by name, `search_files` by
+      content, `recent_files` by time) LOCATES a file and the organise family
+      (`move_file`/`copy_file`) REARRANGES it; this bundles files up so the user
+      can back them up or send them on ("back up my Documents into a zip", "zip
+      my resume and cv to send", "make an archive of the report") -- a real
+      autonomy win. The originals are always left exactly where they are
+- [x] Zips a single file, several files (a list, or a comma/newline-separated
+      string), or a whole folder (walked recursively, system/heavy dirs pruned
+      like the rest of the file family); archive entries are stored relative to
+      the home folder so the structure is sensible and no absolute path leaks
+- [x] Rooted in the user's home only (shares `find_files`' containment via
+      `organize._resolve_under_home`): BOTH every source AND the destination
+      `.zip` are rejected unless they live inside the user's home, so Jarvis can
+      never read `C:\Windows` or drop an archive outside the user's own folders
+- [x] Never overwrites an existing `.zip` (a hallucination can't clobber a
+      backup); a missing `.zip` suffix is added; the archive is written to a
+      `.part` temp file in the destination folder and only `os.replace`-d into
+      place once complete, so a crash never leaves a half-written archive
+- [x] Bounded everywhere: caps on file count (5000), total uncompressed bytes
+      (500 MB), folder-walk depth, and a hard wall-clock time budget -- a runaway
+      "zip everything" stops early with a clear note instead of hanging or
+      filling the disk; unreadable/vanished files are skipped and counted
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`files`/`paths`/`from`/`to`/`name`/...),
+      a list-shaped `sources` handled, sources outside home skipped with a
+      friendly note, all output forced to pure ASCII -- never raises, never
+      crashes the agent
+- [x] Agent system prompt now steers "back up / archive / zip these files" to
+      `zip_files`; the console "Try:" line suggests "back up my documents into a
+      zip"
+- [x] `tests/smoke.py archive` (in the safe set) covers zip-a-folder (with noise
+      pruned + originals kept), zip-several-files + auto `.zip` suffix, alt arg
+      names, the never-overwrite guard, the containment guard (source AND dest),
+      the total-size cap (no partial archive), ASCII-only output, and the
+      empty/missing/wrong-type/list-shape guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -375,8 +413,12 @@
       fuzzy-match wording, not just substrings
 - [x] File management: move/rename/copy a located file -- done in Phase 19
       (`move_file`/`copy_file`)
-- [ ] File management next: opt-in delete-to-Recycle-Bin (needs a safe
-      confirm/undo path, e.g. send2trash), and moving whole folders
+- [x] File management: back up / archive files into a .zip -- done in Phase 20
+      (`zip_files`); whole folders can be zipped too
+- [ ] File management next: an `unzip`/extract counterpart to zip_files
+      (extract into a home folder, never overwrite); opt-in delete-to-Recycle-
+      Bin (needs a safe confirm/undo path, e.g. send2trash); moving whole folders
+      with move_file
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)
