@@ -40,6 +40,7 @@ def main():
     from .tools import convert  # noqa: F401
     from .tools import dates  # noqa: F401
     from .tools import disk  # noqa: F401
+    from .tools import explorer  # noqa: F401
     from .tools import extract  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
@@ -130,6 +131,7 @@ def main():
           "what did I work on today / rename that file to notes_final.txt / "
           "make a folder called taxes in documents / "
           "how big is my downloads folder / "
+          "open my downloads folder / "
           "back up my documents into a zip / unzip my backup / "
           "delete that old draft to the recycle bin / "
           "actually my wifi password changed to hunter2\n")

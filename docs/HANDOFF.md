@@ -289,12 +289,37 @@ knows what to tidy. Read-only: it never moves, writes or deletes anything.
   missing-folder message, ASCII-only, wrong-type/extra-arg guards. Full safe set:
   130 checks, all PASS.
 
+## 2026-07-30 — Open / reveal a folder in Explorer (Phase 25)
+
+Added `open_folder` (`jarvis/tools/explorer.py`): the "show me that" member of the
+file family. After the family LOCATES / rearranges / backs up / removes a file and
+folder_size flags what's eating the disk, this pops the folder open in Windows
+Explorer ("open my Downloads folder", "show me that folder", "reveal that file").
+Pointed at a file it opens the file's folder with the file highlighted. The natural
+follow-up after folder_size.
+- Optional `folder` (or a file path); no args = home folder. A folder is opened in
+  a new window (`os.startfile`); a file is revealed (`explorer /select,<path>`).
+- Reuses `organize._resolve_under_home` for containment: a path outside home
+  (incl. a `..`-escape, resolved + re-checked) is REFUSED and nothing is launched.
+  Read-only -- never moves/writes/deletes. The OS launch is isolated in a fixed-
+  argv, `shell=False` `_reveal(path, is_file)` helper (a hallucinated path can't
+  become a shell command, and the smoke test swaps in a hermetic fake so no window
+  opens). Missing target + OS launch failure -> friendly ASCII messages. Wrong-type
+  / alt-name (`path`/`directory`/`dir`/`file`/...) args coerced. Never raises.
+- Wired into `app.py` imports + the console "Try:" line ("open my downloads
+  folder"), and the agent system prompt (open_folder after the folder_size bullet).
+- `tests/smoke.py explorer` (safe set): open-a-folder, reveal-a-file (highlighted),
+  whole-home default, alt arg names, containment (absolute + `..`-escape, nothing
+  launched), missing target, OS-launch-failure guard, ASCII-only, wrong-type/extra-
+  arg guards -- via a hermetic fake so no real window opens. Full safe set: 139
+  checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 24 that is 49 without browser, 55 with (54 + `folder_size`). No
+after Phase 25 that is 50 without browser, 56 with (55 + `open_folder`). No
 tools are being silently dropped.
 
 ## How to test (in order)

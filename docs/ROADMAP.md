@@ -527,6 +527,42 @@
       arg names, the containment guard (absolute AND `..`-escape), the missing-
       folder message, ASCII-only output, and the wrong-type / extra-arg guards
 
+### Phase 25 — Open / reveal a folder in Explorer (2026-07-30)
+- [x] `open_folder` tool (`jarvis/tools/explorer.py`): the "show me that" member
+      of the file family. The navigation tools LOCATE a file, organise REARRANGES
+      it, archive backs it up / restores it, recycle removes it and folder_size
+      reports what is eating the disk -- but after all that the user still had to
+      go and open the folder by hand. Now Jarvis can pop it open ("open my
+      Downloads folder", "show me that folder in Explorer", "reveal that file")
+      and, pointed at a file, opens the file's folder with the file highlighted --
+      a real autonomy win, and the natural follow-up after folder_size flags a
+      heavy folder
+- [x] Give an optional `folder` (like 'Downloads') or a file path (like
+      'Desktop/report.pdf'); with nothing it opens the home folder. A folder is
+      opened in a new Explorer window; a file is revealed (its folder opens with
+      the file selected)
+- [x] Rooted in the user's home only (shares `find_files`' containment via
+      `organize._resolve_under_home`): a path outside home -- including a
+      `..`-escape, which is resolved and re-checked -- is REJECTED and nothing is
+      launched, so Jarvis can never fling open `C:\Windows` or all of `C:\`
+- [x] Read-only (opening a window never moves/writes/deletes anything); the
+      actual launch is isolated in a fixed-argv, `shell=False` `_reveal` helper so
+      a hallucinated path can never become a shell command (and the smoke test can
+      swap in a hermetic fake -- no window ever pops up during tests)
+- [x] Hardened vs 8B hallucinations: no args is valid (home), wrong-type `folder`
+      coerced, alt arg names accepted (`path`/`directory`/`dir`/`file`/...), a
+      missing target and an OS launch failure both surface as friendly messages,
+      all output forced to pure ASCII -- never raises, never changes anything
+- [x] Agent system prompt now steers "open / show / reveal that folder or file"
+      to `open_folder` (and to use it after folder_size flags a heavy folder); the
+      console "Try:" line suggests "open my downloads folder"
+- [x] `tests/smoke.py explorer` (in the safe set) covers opening a folder,
+      revealing a file (highlighted), the whole-home default, alt arg names, the
+      containment guard (absolute AND `..`-escape, with nothing launched), the
+      missing-target message, the OS-launch-failure guard, ASCII-only output, and
+      the wrong-type / extra-arg guards. The real Explorer launch is swapped for a
+      hermetic fake, so no window ever opens during the test
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -569,8 +605,10 @@
       biggest items so the user knows what to tidy
 - [ ] File management next: moving whole folders with move_file; recycling whole
       folders with recycle_file (needs the same care as files-only today)
-- [ ] Disk-usage next: an `open_folder` tool (reveal a folder in Explorer) so
-      after folder_size flags a heavy folder the user can jump straight to it
+- [x] Disk-usage next: an `open_folder` tool (reveal a folder in Explorer) so
+      after folder_size flags a heavy folder the user can jump straight to it --
+      done in Phase 25 (`open_folder`); read-only, home-contained, reveals a file
+      highlighted, hermetic-tested (no window opens in tests)
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

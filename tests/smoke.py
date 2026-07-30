@@ -1,7 +1,8 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-makefolder, disk, archive, extract, recycle, clipboard, tasks, calc, dates, convert,
-reminders, dispatch, agent, camera, vision, tts, hud, watch, e2e, all
+makefolder, disk, explorer, archive, extract, recycle, clipboard, tasks, calc,
+dates, convert, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+e2e, all
 (default: safe set)
 """
 
@@ -25,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, explorer, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -844,6 +845,129 @@ def t_disk():
             return "guards held"
         check("folder_size hallucination guards", hallucination_guards)
     finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_explorer():
+    """Exercises the open_folder tool (reveal in Explorer) + its defenses against
+    8B hallucinations. The real Explorer launch is swapped for a hermetic fake
+    that just records what would have been opened, so nothing actually pops up;
+    everything runs inside a temp tree in the user's home, so the test is
+    deterministic, needs no model, and lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import explorer  # noqa: F401  (register open_folder)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_explorer_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    (sandbox / "sub").mkdir(parents=True, exist_ok=True)
+    (sandbox / "sub" / "report.txt").write_text("hello", encoding="utf-8")
+
+    # hermetic fake: record the (path, is_file) that WOULD be opened instead of
+    # actually launching an Explorer window.
+    opened = []
+    real_reveal = explorer._reveal
+    explorer._reveal = lambda path, is_file: opened.append((str(path), is_file))
+
+    try:
+        def open_a_folder():
+            opened.clear()
+            out = registry.dispatch("open_folder", {"folder": "jarvis_explorer_smoke"})
+            assert "Opened" in out and "Error" not in out, out
+            assert len(opened) == 1 and opened[0][1] is False, opened
+            assert opened[0][0].endswith("jarvis_explorer_smoke"), opened
+            return "folder opened (not as a file)"
+        check("open_folder opens a folder", open_a_folder)
+
+        def reveal_a_file():
+            opened.clear()
+            out = registry.dispatch("open_folder",
+                {"folder": "jarvis_explorer_smoke/sub/report.txt"})
+            assert "highlighted" in out and "Error" not in out, out
+            # a file is revealed (is_file True), pointing at the file itself
+            assert len(opened) == 1 and opened[0][1] is True, opened
+            assert opened[0][0].endswith("report.txt"), opened
+            return "file revealed + highlighted"
+        check("open_folder reveals a file", reveal_a_file)
+
+        def default_is_home():
+            opened.clear()
+            out = registry.dispatch("open_folder", {})
+            assert "home folder" in out and "Error" not in out, out
+            assert len(opened) == 1 and opened[0][1] is False, opened
+            return "no-arg -> home folder"
+        check("open_folder default (home)", default_is_home)
+
+        def alt_arg_names():
+            opened.clear()
+            out = registry.dispatch("open_folder", {"path": "jarvis_explorer_smoke"})
+            assert "Opened" in out, out
+            out2 = registry.dispatch("open_folder", {"directory": "jarvis_explorer_smoke/sub"})
+            assert "Opened" in out2, out2
+            return "alt path/directory arg names handled"
+        check("open_folder alt arg names", alt_arg_names)
+
+        def containment_guard():
+            opened.clear()
+            # opening OUTSIDE the user's home must be refused (nothing launched)
+            r = registry.dispatch("open_folder", {"folder": "C:\\Windows"})
+            assert "only work inside your own folders" in r, r
+            # a ..-escape out of home is also refused (resolved + re-checked)
+            r2 = registry.dispatch("open_folder",
+                {"folder": "jarvis_explorer_smoke/../../../Windows"})
+            assert "only work inside your own folders" in r2, r2
+            assert opened == [], "a blocked path must never launch Explorer"
+            return "escape outside home blocked, nothing launched"
+        check("open_folder containment guard", containment_guard)
+
+        def missing_target():
+            opened.clear()
+            r = registry.dispatch("open_folder", {"folder": "jarvis_explorer_smoke/nope"})
+            assert "can't find" in r, r
+            assert opened == [], "a missing target must never launch Explorer"
+            return "missing target -> friendly message"
+        check("open_folder missing target", missing_target)
+
+        def launch_failure_guard():
+            # if the OS launch itself blows up, it must come back as a friendly
+            # string, never raise or crash the agent.
+            opened.clear()
+            def boom(path, is_file):
+                raise OSError("explorer exploded")
+            explorer._reveal = boom
+            try:
+                r = registry.dispatch("open_folder", {"folder": "jarvis_explorer_smoke"})
+                assert "Error" in r and "couldn't open" in r, r
+            finally:
+                explorer._reveal = lambda path, is_file: opened.append((str(path), is_file))
+            return "OS launch failure surfaced as a message"
+        check("open_folder launch-failure guard", launch_failure_guard)
+
+        def output_is_ascii():
+            registry.dispatch("open_folder", {"folder": "jarvis_explorer_smoke"}).encode("ascii")
+            registry.dispatch("open_folder", {}).encode("ascii")
+            registry.dispatch("open_folder", {"folder": "C:\\Windows"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("open_folder ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # wrong types / weird shapes must not raise
+            registry.dispatch("open_folder", {"folder": 123})
+            registry.dispatch("open_folder", {"folder": ["a"]})
+            registry.dispatch("open_folder", {"folder": {}})
+            registry.dispatch("open_folder", {"folder": None})
+            # an unexpected extra arg is dropped, the call still succeeds
+            opened.clear()
+            out = registry.dispatch("open_folder",
+                {"folder": "jarvis_explorer_smoke", "reason": "curious"})
+            assert "Opened" in out, out
+            return "guards held"
+        check("open_folder hallucination guards", hallucination_guards)
+    finally:
+        explorer._reveal = real_reveal
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
@@ -1875,7 +1999,8 @@ def t_e2e():
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
-            "makefolder": t_makefolder, "disk": t_disk, "archive": t_archive,
+            "makefolder": t_makefolder, "disk": t_disk, "explorer": t_explorer,
+            "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert,
@@ -1890,7 +2015,8 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_makefolder(); t_disk(); t_archive(); t_extract()
+        t_recent(); t_organize(); t_makefolder(); t_disk(); t_explorer()
+        t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:

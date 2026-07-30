@@ -85,7 +85,12 @@ Rules:
   using, or what is taking up room ("how big is my Downloads folder", "what's
   taking up space in Documents"), call folder_size with an optional folder; it is
   read-only and reports the total size, the file count, and the biggest items
-  inside.
+  inside. To OPEN a folder in Windows Explorer so the user can see it, or to
+  reveal a file (open its folder with the file highlighted) -- "open my Downloads
+  folder", "show me that folder", "reveal that file", and as the natural
+  follow-up after folder_size flags a heavy folder -- call open_folder with an
+  optional folder or file path; it is read-only and only opens the user's own
+  folders.
 - Reminders/timers: when the user wants to be told something at a LATER time
   ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
   17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)
