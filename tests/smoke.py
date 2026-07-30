@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, clipboard, tasks, calc, dates,
-agent, camera, vision, tts, hud, watch, e2e, all (default: safe set)
+dispatch, agent, camera, vision, tts, hud, watch, e2e, all (default: safe set)
 """
 
 import sys
@@ -462,6 +462,79 @@ def t_dates():
     check("dates hallucination guards", hallucination_guards)
 
 
+def t_dispatch():
+    """Exercises the self-correcting tool dispatcher: hallucinated tool names,
+    junk argument shapes, extra/missing arguments. No model needed, so it lives
+    in the safe set."""
+    from jarvis.tools import calc  # noqa: F401  (register a real tool to hit)
+    from jarvis.tools import registry
+
+    def unknown_tool_suggests():
+        # a misspelled/hallucinated name points back at the closest real tool
+        r = registry.dispatch("calculatee", {"expression": "2+2"})
+        assert "no tool called 'calculatee'" in r, r
+        assert "Did you mean" in r and "calculate" in r, r
+        # a totally bogus name still recovers gracefully (no crash, a nudge)
+        r2 = registry.dispatch("florblegorp", {})
+        assert "no tool called" in r2 and "list_tools" in r2, r2
+        return "unknown tool names suggest a real one"
+    check("dispatch unknown-tool recovery", unknown_tool_suggests)
+
+    def bad_name_types_dont_crash():
+        assert "Error" in registry.dispatch("", {})
+        assert "Error" in registry.dispatch(None, {})
+        assert "Error" in registry.dispatch(123, {})
+        return "junk tool names survived"
+    check("dispatch bad-name guards", bad_name_types_dont_crash)
+
+    def normalizes_arg_shapes():
+        # the model sometimes sends a JSON STRING instead of an object
+        assert registry.dispatch("calculate", '{"expression": "2+2"}').endswith("4")
+        # ...or a list / None / garbage: normalized to no-args, never a crash
+        registry.dispatch("calculate", [1, 2, 3])
+        registry.dispatch("calculate", None)
+        registry.dispatch("calculate", "not json at all")
+        return "odd argument shapes normalized"
+    check("dispatch arg normalization", normalizes_arg_shapes)
+
+    def drops_extra_args():
+        # a valid call sprinkled with hallucinated extra keys STILL succeeds,
+        # with a quiet note naming what was ignored
+        r = registry.dispatch("calculate",
+                              {"expression": "2+2", "reason": "why", "confidence": 1})
+        assert r.startswith("2+2 = 4"), r
+        assert "ignored unexpected argument" in r, r
+        assert "reason" in r and "confidence" in r, r
+        # a clean call must NOT get a note (we didn't break normal tools)
+        clean = registry.dispatch("calculate", {"expression": "2+2"})
+        assert clean == "2+2 = 4", clean
+        return "extra args dropped, clean calls untouched"
+    check("dispatch drops extra args", drops_extra_args)
+
+    def reports_missing_required():
+        # register a throwaway tool with a genuinely required argument
+        @registry.tool("smoke_needy", "test-only tool",
+                       {"type": "object",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"]})
+        def _needy(x):
+            return f"got {x}"
+        miss = registry.dispatch("smoke_needy", {})
+        assert "needs" in miss and "x" in miss, miss
+        # supplying it works; adding junk still works (junk dropped)
+        assert registry.dispatch("smoke_needy", {"x": "hi"}) == "got hi"
+        assert registry.dispatch("smoke_needy",
+                                 {"x": "hi", "junk": 1}).startswith("got hi")
+        return "missing required arg reported by name"
+    check("dispatch missing-required report", reports_missing_required)
+
+    def list_tools_enumerates():
+        out = registry.dispatch("list_tools", {})
+        assert "Available tools" in out and "calculate" in out, out
+        return "list_tools works"
+    check("dispatch list_tools", list_tools_enumerates)
+
+
 def t_agent():
     from jarvis import config as c
     from jarvis.agent import Agent
@@ -562,7 +635,8 @@ def t_e2e():
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "clipboard": t_clipboard,
-            "tasks": t_tasks, "calc": t_calc, "dates": t_dates, "agent": t_agent,
+            "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
+            "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
 
@@ -573,7 +647,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_clipboard()
-        t_tasks(); t_calc(); t_dates()
+        t_tasks(); t_calc(); t_dates(); t_dispatch()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

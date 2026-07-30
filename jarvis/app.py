@@ -115,7 +115,9 @@ def main():
         reply = agent.chat(text, status=lambda s: print(f"  {s}", flush=True))
         _dt = _time.monotonic() - _t0
         print(f"jarvis> {reply}")
-        print(f"  (answered in {_dt:.1f}s)\n")
+        used = ", ".join(dict.fromkeys(agent.last_tools))  # de-dup, keep order
+        tail = f" using {used}" if used else ""
+        print(f"  (answered in {_dt:.1f}s{tail})\n")
         hud.state("speaking")
         speaker.say(reply)
         hud.state(resting)

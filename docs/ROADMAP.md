@@ -150,6 +150,32 @@
       guards (unparseable, ambiguous slash date, over-long, offset overflow,
       wrong types)
 
+### Phase 13 — Self-correcting tool dispatch (2026-07-30)
+- [x] Hardened `jarvis/tools/registry.py::dispatch` so an 8B hallucination in a
+      tool CALL no longer dead-ends the agent — a real autonomy/robustness win,
+      not another tool: the model recovers on the next round instead of getting
+      stuck
+- [x] Hallucinated/misspelled tool name -> no longer a bare "unknown"; it
+      fuzzy-matches (difflib) the closest REAL tool and says "Did you mean: X?",
+      so the next round self-corrects; a totally bogus name is nudged toward the
+      new `list_tools`
+- [x] New `list_tools` tool: the model can enumerate exactly which tools exist
+      when it is unsure, instead of guessing a name
+- [x] Argument shapes coerced: a JSON string, a list, None, or garbage where a
+      dict was expected is normalised, never crashes
+- [x] Hallucinated EXTRA arguments (a stray "reason"/"confidence"/... key) are
+      dropped against the function's real signature so a valid call STILL
+      succeeds, with a quiet note naming what was ignored; a genuinely missing
+      required argument is reported BY NAME so the model knows what to supply
+- [x] Never raises: every path returns a plain ASCII string; clean calls are
+      byte-for-byte unchanged (no note), so existing tools are untouched
+- [x] UX: the console now shows which tools a reply used
+      ("answered in N.Ns using calculate, write_file"), so the autonomy is
+      visible; pure ASCII
+- [x] `tests/smoke.py dispatch` (in the safe set) covers unknown-tool
+      suggestion, bad-name guards, arg-shape normalization, extra-arg dropping,
+      missing-required reporting, and list_tools
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.

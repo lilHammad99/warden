@@ -57,6 +57,7 @@ class Agent:
         self.model = model
         self.messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.lock = threading.Lock()  # console + voice threads share one brain
+        self.last_tools: list[str] = []  # tools used in the most recent chat()
 
     def _call_model(self, messages):
         try:
@@ -90,6 +91,7 @@ class Agent:
 
     def chat(self, user_text: str, status=lambda s: None) -> str:
         with self.lock:
+            self.last_tools = []
             self._refresh_memory()
             self.messages.append({"role": "user", "content": user_text})
             for _ in range(MAX_TOOL_ROUNDS):
@@ -115,6 +117,8 @@ class Agent:
                         except json.JSONDecodeError:
                             args = {}
                     status(f"...using {name.replace('_', ' ')}")
+                    if isinstance(name, str) and name in registry._TOOLS:
+                        self.last_tools.append(name)
                     result = registry.dispatch(name, args)
                     self.messages.append(
                         {"role": "tool", "content": result, "tool_name": name}
