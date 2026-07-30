@@ -71,7 +71,10 @@ Rules:
   files ("back up my Documents", "zip my resume and cv to send"), call zip_files
   with sources (a file, a folder, or several files separated by commas) and dest
   (a name for the .zip); the originals are left in place and an existing archive
-  is never overwritten.
+  is never overwritten. To go the other way and open a .zip back up ("unzip my
+  backup", "extract downloaded.zip into Documents"), call unzip_files with source
+  (the .zip) and optionally dest (a folder); it never overwrites existing files
+  and leaves the archive in place.
 - Reminders/timers: when the user wants to be told something at a LATER time
   ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
   17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)

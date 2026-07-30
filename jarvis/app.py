@@ -39,6 +39,7 @@ def main():
     from .tools import clipboard  # noqa: F401
     from .tools import convert  # noqa: F401
     from .tools import dates  # noqa: F401
+    from .tools import extract  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
     from .tools import organize  # noqa: F401
@@ -125,7 +126,7 @@ def main():
           "how many days until christmas / add milk to my to-do list / "
           "find my resume / which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "
-          "back up my documents into a zip / "
+          "back up my documents into a zip / unzip my backup / "
           "actually my wifi password changed to hunter2\n")
 
     while True:

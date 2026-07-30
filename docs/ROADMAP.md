@@ -386,6 +386,45 @@
       the total-size cap (no partial archive), ASCII-only output, and the
       empty/missing/wrong-type/list-shape guards
 
+### Phase 21 — Unzip / extract archives (2026-07-30)
+- [x] `unzip_files` tool (`jarvis/tools/extract.py`): the restore/unpack
+      counterpart to `zip_files`. `zip_files` bundles files INTO a `.zip`; this
+      opens one back UP. Once Jarvis has located an archive (`find_files` /
+      `recent_files`) the user can say "unzip my backup", "extract downloaded.zip
+      into Documents", "open that archive" and Jarvis unpacks it into the user's
+      own folders -- closes the last file-management loop
+- [x] Give `source` (the `.zip`) and optionally `dest` (a folder to extract
+      into); by default a new folder named after the archive is created beside
+      it. The archive itself is always left exactly where it is
+- [x] Rooted in the user's home only (shares `find_files`' containment via
+      `organize._resolve_under_home`): BOTH the source `.zip` AND the destination
+      folder are rejected unless they live inside the user's home, so Jarvis can
+      never read an archive from `C:\Windows` or write extracted files outside
+      the user's folders
+- [x] **Zip-slip proof.** Every entry's target is rebuilt from sanitised path
+      parts -- a `..` traversal component is REJECTED and the entry skipped, drive
+      letters/leading slashes neutralised -- then re-checked to be inside the
+      destination, so a hostile/hallucinated entry like `..\..\Windows\evil.exe`
+      can never escape the extract folder (covered by a real malicious-zip test)
+- [x] Never overwrites: an entry whose target already exists is SKIPPED and
+      counted, never clobbered, so extraction can't destroy existing work
+- [x] Zip-bomb bounded: caps on file count (5000), total uncompressed bytes
+      (500 MB), per-entry compression ratio, nested path depth, and a wall-clock
+      budget; each file is streamed with a running byte cap so a lying size
+      header can't blow up memory or fill the disk. Atomic per file (written to a
+      `.part` temp then `os.replace`-d in, so a crash leaves no half-written file)
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`archive`/`into`/`from`/`to`/...), a
+      corrupt/non-zip file reported as a friendly message, all output forced to
+      pure ASCII -- never raises, never crashes the agent
+- [x] Agent system prompt now steers "unzip / extract / open that archive" to
+      `unzip_files`; the console "Try:" line suggests "unzip my backup"
+- [x] `tests/smoke.py extract` (in the safe set) covers extract-into-default-
+      folder (archive kept), named dest, the never-overwrite guard, a REAL
+      zip-slip archive staying inside the folder, the containment guard (source
+      AND dest), a corrupt/non-zip archive, alt arg names, ASCII-only output, and
+      the empty/missing/wrong-type/folder-source guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -415,10 +454,11 @@
       (`move_file`/`copy_file`)
 - [x] File management: back up / archive files into a .zip -- done in Phase 20
       (`zip_files`); whole folders can be zipped too
-- [ ] File management next: an `unzip`/extract counterpart to zip_files
-      (extract into a home folder, never overwrite); opt-in delete-to-Recycle-
-      Bin (needs a safe confirm/undo path, e.g. send2trash); moving whole folders
-      with move_file
+- [x] File management: an `unzip`/extract counterpart to zip_files -- done in
+      Phase 21 (`unzip_files`); extracts into a home folder, zip-slip proof,
+      never overwrites
+- [ ] File management next: opt-in delete-to-Recycle-Bin (needs a safe
+      confirm/undo path, e.g. send2trash); moving whole folders with move_file
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

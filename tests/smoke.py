@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-archive, clipboard, tasks, calc, dates, convert, reminders, dispatch, agent,
+archive, extract, clipboard, tasks, calc, dates, convert, reminders, dispatch, agent,
 camera, vision, tts, hud, watch, e2e, all (default: safe set)
 """
 
@@ -24,7 +24,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, files, find, memory, organize, recent, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, extract, files, find, memory, organize, recent, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -782,6 +782,145 @@ def t_archive():
                     pass
 
 
+def t_extract():
+    """Exercises the unzip_files tool (extract/unpack) + its defenses against 8B
+    hallucinations and hostile archives (zip-slip, never-overwrite). Works
+    entirely inside a temp tree in the user's home, crafts its own .zip files, so
+    it is deterministic, needs no model, and lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    import zipfile
+    from jarvis.tools import extract as ext  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_extract_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+    escape_marker = home / "jarvis_extract_escaped.txt"
+
+    def mkzip(relname, entries):
+        """entries: list of (arcname, data). Written under the sandbox."""
+        zp = sandbox / relname
+        zp.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as zf:
+            for arc, data in entries:
+                zf.writestr(arc, data)
+        return zp
+
+    try:
+        if escape_marker.exists():
+            escape_marker.unlink()
+
+        # a normal archive with a nested folder
+        mkzip("good.zip", [("a.txt", "hello"),
+                           ("sub/b.txt", "world")])
+
+        def extract_default_folder():
+            out = registry.dispatch("unzip_files",
+                {"source": "jarvis_extract_smoke/good.zip"})
+            assert "Extracted 2 files" in out, out
+            # default dest is a folder named after the archive, beside it
+            d = sandbox / "good"
+            assert (d / "a.txt").read_text(encoding="utf-8") == "hello", out
+            assert (d / "sub" / "b.txt").read_text(encoding="utf-8") == "world", out
+            # the archive itself is left in place
+            assert (sandbox / "good.zip").exists(), "archive vanished"
+            shutil.rmtree(d, ignore_errors=True)
+            return "extracted into a default folder, archive kept"
+        check("extract default folder", extract_default_folder)
+
+        def extract_named_dest():
+            out = registry.dispatch("unzip_files",
+                {"source": "jarvis_extract_smoke/good.zip",
+                 "dest": "jarvis_extract_smoke/out"})
+            assert "Extracted" in out, out
+            assert (sandbox / "out" / "a.txt").exists(), out
+            return "extracted into a named folder"
+        check("extract named dest", extract_named_dest)
+
+        def never_overwrites():
+            # a file already at the target is skipped, not clobbered
+            (sandbox / "out" / "a.txt").write_text("KEEP", encoding="utf-8")
+            out = registry.dispatch("unzip_files",
+                {"source": "jarvis_extract_smoke/good.zip",
+                 "dest": "jarvis_extract_smoke/out"})
+            assert (sandbox / "out" / "a.txt").read_text(encoding="utf-8") == "KEEP", out
+            assert "already existed" in out or "already extracted" in out, out
+            return "existing files never overwritten"
+        check("extract never overwrites", never_overwrites)
+
+        def zip_slip_blocked():
+            # a hostile entry tries to escape the extract folder with ../../
+            mkzip("evil.zip", [("safe.txt", "ok"),
+                               ("../../jarvis_extract_escaped.txt", "PWNED")])
+            out = registry.dispatch("unzip_files",
+                {"source": "jarvis_extract_smoke/evil.zip",
+                 "dest": "jarvis_extract_smoke/evilout"})
+            # the safe file lands inside, the escaping one is refused
+            assert (sandbox / "evilout" / "safe.txt").exists(), out
+            assert not escape_marker.exists(), "ZIP-SLIP ESCAPED THE FOLDER"
+            assert "couldn't safely unpack" in out or "skipped" in out, out
+            return "zip-slip entry blocked, stayed inside the folder"
+        check("extract zip-slip blocked", zip_slip_blocked)
+
+        def containment_guard():
+            # source outside home refused; dest outside home refused
+            s = registry.dispatch("unzip_files", {"source": "C:\\Windows\\x.zip"})
+            assert "only work inside your own folders" in s or "can't find" in s, s
+            d = registry.dispatch("unzip_files",
+                {"source": "jarvis_extract_smoke/good.zip", "dest": "C:\\Windows\\out"})
+            assert "only work inside your own folders" in d, d
+            return "escape outside home blocked (source + dest)"
+        check("extract containment guard", containment_guard)
+
+        def bad_zip():
+            (sandbox / "notzip.zip").write_text("this is not a zip", encoding="utf-8")
+            out = registry.dispatch("unzip_files",
+                {"source": "jarvis_extract_smoke/notzip.zip"})
+            assert "isn't a valid .zip" in out, out
+            return "corrupt archive reported, not crashed"
+        check("extract bad zip", bad_zip)
+
+        def alt_arg_names():
+            out = registry.dispatch("unzip_files",
+                {"archive": "jarvis_extract_smoke/good.zip", "into": "jarvis_extract_smoke/alt"})
+            assert "Extracted" in out, out
+            assert (sandbox / "alt" / "a.txt").exists(), out
+            return "alt archive/into arg names handled"
+        check("extract alt arg names", alt_arg_names)
+
+        def output_is_ascii():
+            registry.dispatch("unzip_files",
+                {"source": "jarvis_extract_smoke/good.zip",
+                 "dest": "jarvis_extract_smoke/asciiout"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("extract ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            assert "Error" in registry.dispatch("unzip_files", {"source": ""})
+            assert "Error" in registry.dispatch("unzip_files", {})
+            miss = registry.dispatch("unzip_files",
+                {"source": "jarvis_extract_smoke/ghost.zip"})
+            assert "can't find" in miss, miss
+            folder = registry.dispatch("unzip_files", {"source": "jarvis_extract_smoke"})
+            assert "not a .zip" in folder or "folder" in folder, folder
+            # wrong types must not raise
+            registry.dispatch("unzip_files", {"source": 123, "dest": 456})
+            registry.dispatch("unzip_files", {"source": ["a"], "dest": {}})
+            assert not escape_marker.exists(), "escape happened during guards"
+            return "guards held"
+        check("extract hallucination guards", hallucination_guards)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+        if escape_marker.exists():
+            try:
+                escape_marker.unlink()
+            except OSError:
+                pass
+
+
 def t_clipboard():
     """Exercises the clipboard tools + their defenses against 8B
     hallucinations. No model needed, so it lives in the safe set. The user's
@@ -1392,7 +1531,7 @@ def t_e2e():
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize, "archive": t_archive,
-            "clipboard": t_clipboard,
+            "extract": t_extract, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
@@ -1406,7 +1545,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_archive(); t_clipboard()
+        t_recent(); t_organize(); t_archive(); t_extract(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

@@ -183,6 +183,35 @@ put.
   partial archive, ASCII-only, and the empty/missing/wrong-type/list-shape
   guards). Full safe set: 51 tools with browser (45 without), all PASS.
 
+## 2026-07-30 — Unzip / extract archives (Phase 21)
+
+Added `unzip_files` (`jarvis/tools/extract.py`): the restore/unpack counterpart
+to `zip_files`. zip bundles files IN; this opens one back UP ("unzip my backup",
+"extract downloaded.zip into Documents", "open that archive"). Closes the last
+file-management loop (locate -> rearrange -> back up -> restore).
+- `source` (the `.zip`) + optional `dest` folder; default is a new folder named
+  after the archive, beside it. The archive is always left in place.
+- Reuses `organize._resolve_under_home` so BOTH the source `.zip` AND the dest
+  folder must be inside home -- can't read an archive from `C:\Windows` or write
+  outside the user's folders. **Zip-slip proof**: each entry is rebuilt from
+  sanitised parts (a `..` component is rejected + skipped, drive letters/leading
+  slashes neutralised) and re-checked to stay inside dest, so `..\..\evil.exe`
+  can never escape (there's a real malicious-zip smoke test).
+- Never overwrites (existing target files skipped + counted). Zip-bomb bounded:
+  5000 files / 500 MB uncompressed / compression-ratio / depth / wall-clock caps,
+  streamed with a running byte cap so a lying header can't fill the disk. Atomic
+  per file (`.part` temp then `os.replace`). Corrupt/non-zip, wrong-type, empty,
+  missing all -> friendly ASCII strings. Never raises.
+- Wired into `app.py` imports + the console "Try:" line ("unzip my backup"), and
+  the agent system prompt (unzip_files after the zip_files bullet).
+- `tests/smoke.py extract` added to the safe set (default folder, named dest,
+  never-overwrite, a REAL zip-slip archive staying inside the folder, containment
+  for source AND dest, corrupt zip, alt arg names, ASCII-only, and the
+  empty/missing/wrong-type/folder-source guards). Safe set: 103 checks, all PASS
+  (46 tools registered without the optional browser module).
+
+## 2026-07-30 — Tool-count note
+
 Tool-count note (the 48/44 fluctuation): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function -- verified: 51 registered ==
 51 decorators defined (was 50 before this phase). The printed number only swings
