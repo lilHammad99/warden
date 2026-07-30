@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
-Sections: imports, tools, memory, shell, find, search, clipboard, tasks, calc,
-dates, convert, reminders, dispatch, agent, camera, vision, tts, hud, watch,
-e2e, all (default: safe set)
+Sections: imports, tools, memory, shell, find, search, recent, clipboard,
+tasks, calc, dates, convert, reminders, dispatch, agent, camera, vision, tts,
+hud, watch, e2e, all (default: safe set)
 """
 
 import sys
@@ -24,7 +24,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, calc, camera, clipboard, convert, dates, files, find, memory, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, browser, calc, camera, clipboard, convert, dates, files, find, memory, recent, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -364,6 +364,128 @@ def t_search():
             assert "No files containing" in out, out
             return "no-match message ok"
         check("search no-match message", no_match_is_friendly)
+    finally:
+        import shutil
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_recent():
+    """Exercises the recent_files tool (search by TIME) + its defenses against
+    8B hallucinations. Uses a temp tree inside the user's home with controlled
+    modification times, so it is deterministic, needs no model, and lives in
+    the safe set."""
+    import os
+    import pathlib
+    import time
+    from jarvis.tools import recent  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_recent_smoke"
+    (sandbox / "sub").mkdir(parents=True, exist_ok=True)
+    now = time.time()
+
+    def _touch(rel, days_ago):
+        p = sandbox / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+        t = now - days_ago * 86400
+        os.utime(p, (t, t))
+        return p
+
+    # newest -> oldest, spanning the default 7-day window boundary
+    _touch("fresh_today.txt", 0.01)       # ~15 min ago
+    _touch("report.docx", 2)              # 2 days ago
+    _touch("sub/notes.md", 5)             # 5 days ago, nested
+    _touch("ancient.txt", 400)            # well outside any sane window
+    # a pruned dir whose (very recent) file must NOT surface
+    (sandbox / "node_modules").mkdir(exist_ok=True)
+    nm = sandbox / "node_modules" / "build.log"
+    nm.write_text("x", encoding="utf-8")
+    os.utime(nm, (now, now))
+
+    try:
+        def happy_path_and_order():
+            out = registry.dispatch("recent_files", {"folder": "jarvis_recent_smoke"})
+            # recent files inside the 7-day default show; the 400-day one doesn't
+            assert "fresh_today.txt" in out, out
+            assert "report.docx" in out and "notes.md" in out, out
+            assert "ancient.txt" not in out, f"old file leaked: {out}"
+            # newest first: fresh_today must appear before report.docx
+            assert out.index("fresh_today.txt") < out.index("report.docx"), out
+            return "lists recent files newest-first"
+        check("recent happy path + ordering", happy_path_and_order)
+
+        def days_window():
+            # a 1-day window drops the 2- and 5-day-old files
+            out = registry.dispatch("recent_files",
+                                    {"folder": "jarvis_recent_smoke", "days": 1})
+            assert "fresh_today.txt" in out, out
+            assert "report.docx" not in out and "notes.md" not in out, out
+            return "days window narrows results"
+        check("recent days window", days_window)
+
+        def name_filter():
+            out = registry.dispatch(
+                "recent_files",
+                {"folder": "jarvis_recent_smoke", "name": "*.md"})
+            assert "notes.md" in out, out
+            assert "report.docx" not in out and "fresh_today.txt" not in out, out
+            return "name pattern filter ok"
+        check("recent name filter", name_filter)
+
+        def prunes_noise_dirs():
+            out = registry.dispatch("recent_files", {"folder": "jarvis_recent_smoke"})
+            assert "build.log" not in out, f"node_modules not pruned: {out}"
+            return "noise dirs pruned"
+        check("recent prunes noise dirs", prunes_noise_dirs)
+
+        def output_is_ascii():
+            registry.dispatch("recent_files",
+                              {"folder": "jarvis_recent_smoke"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("recent ascii-only output", output_is_ascii)
+
+        def containment_guard():
+            r = registry.dispatch("recent_files", {"folder": "C:\\Windows"})
+            assert "only search inside your own folders" in r, r
+            return "escape outside home blocked"
+        check("recent containment guard", containment_guard)
+
+        def no_match_is_friendly():
+            out = registry.dispatch(
+                "recent_files",
+                {"folder": "jarvis_recent_smoke", "name": "*.zzz"})
+            assert "No files changed" in out, out
+            return "no-match message ok"
+        check("recent no-match message", no_match_is_friendly)
+
+        def hallucination_guards():
+            # no args at all is valid (whole home, last 7 days) -- must not crash
+            registry.dispatch("recent_files", {})
+            # wrong-type / junk 'days' is coerced to the default, never raises
+            for junk in ("soon", -5, 0, True, 1e400, float("inf"), [1, 2], {}):
+                registry.dispatch(
+                    "recent_files", {"folder": "jarvis_recent_smoke", "days": junk})
+            # an absurd but finite window is clamped, not overflowed
+            big = registry.dispatch(
+                "recent_files", {"folder": "jarvis_recent_smoke", "days": 10 ** 9})
+            assert "fresh_today.txt" in big, big
+            # a "3 days" phrase in days extracts the number
+            phrase = registry.dispatch(
+                "recent_files", {"folder": "jarvis_recent_smoke", "days": "3 days"})
+            assert "report.docx" in phrase and "notes.md" not in phrase, phrase
+            # wrong-type folder/name must not raise
+            registry.dispatch("recent_files", {"folder": 5, "name": 7})
+            # bare '*' name filter is treated as no filter, not a crash
+            registry.dispatch(
+                "recent_files", {"folder": "jarvis_recent_smoke", "name": "*"})
+            # a missing folder is a friendly message, not a crash
+            miss = registry.dispatch(
+                "recent_files", {"folder": "jarvis_recent_smoke/nope"})
+            assert "does not exist" in miss, miss
+            return "guards held"
+        check("recent hallucination guards", hallucination_guards)
     finally:
         import shutil
         shutil.rmtree(sandbox, ignore_errors=True)
@@ -978,7 +1100,7 @@ def t_e2e():
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
-            "clipboard": t_clipboard,
+            "recent": t_recent, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
@@ -992,7 +1114,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_clipboard()
+        t_recent(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

@@ -112,6 +112,28 @@ cup", "60 mph in km/h", "2 GB to MB" exactly.
   forgiving input, cross-category + unknown-unit guards, magnitude/overflow
   guards, wrong-type shapes, ASCII-only). Full safe set: 47 tools, all PASS.
 
+## 2026-07-30 — Recently changed files (Phase 18)
+
+Added `recent_files` (`jarvis/tools/recent.py`): the third member of the file-
+navigation family after `find_files` (by NAME) and `search_files` (by CONTENT) --
+it searches by TIME. The model can now act on what the user last touched
+("open the file I was just editing", "what did I work on today", "what did I
+change this week"), listing the most recently modified files newest-first with a
+human "how long ago" phrase.
+- Reuses `find_files`' `_resolve_root` (home-containment), `_SKIP_DIRS` and
+  `_coerce` (imported from `.find`), so it can never crawl outside home or into
+  system/heavy dirs. Optional `days` window (default 7), `folder`, and `name`
+  glob. Bounded on depth/scan/results + wall-clock budget. `days` is coerced and
+  clamped (junk/negative/non-finite -> default, absurd -> capped, "3 days"
+  phrase parsed). Paths forced to pure ASCII. No required args (no args = whole
+  home, last week). Never raises.
+- Wired into `app.py` imports, the agent system prompt (recent_files vs
+  find_files/search_files), and the console "Try:" line ("what did I work on
+  today").
+- `tests/smoke.py recent` added to the safe set (happy path + newest-first
+  ordering, days window, name filter, pruning, ASCII-only, containment guard,
+  no-match message, hallucination guards). Full safe set: 48 tools, all PASS.
+
 ## How to test (in order)
 
 ```

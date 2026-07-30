@@ -59,7 +59,11 @@ Rules:
   spreadsheet", "read my CV"), call find_files. To find WHICH file contains some
   text, or information the user saved but can't locate ("which note has the wifi
   password", "find where I wrote about the budget"), call search_files with the
-  text. find_files searches names; search_files searches file contents.
+  text. find_files searches names; search_files searches file contents. To find
+  what the user changed or worked on RECENTLY, or to reopen the file they were
+  just editing ("what did I work on today", "open the file I was just editing"),
+  call recent_files (optionally with days, a folder, or a name pattern); it
+  lists the most recently modified files, newest first.
 - Reminders/timers: when the user wants to be told something at a LATER time
   ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
   17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)

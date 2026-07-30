@@ -285,6 +285,36 @@
       phrase, string value), the cross-category + unknown-unit guards, the
       magnitude/overflow guards, wrong-type shapes, and ASCII-only output
 
+### Phase 18 — Recently changed files (2026-07-30)
+- [x] `recent_files` tool (`jarvis/tools/recent.py`): the third member of the
+      file-navigation family after `find_files` (by NAME) and `search_files` (by
+      CONTENT) -- it searches by TIME. The 8B model can now act on what the user
+      last touched instead of needing a name or a path ("open the file I was just
+      editing", "what did I work on today", "what did I change this week"),
+      listing the most recently modified files newest-first -- a real autonomy win
+- [x] Optional `days` window (default 7), `folder` (like 'Documents') and `name`
+      glob (like '*.docx') to narrow it; results are sorted newest-first with a
+      human "how long ago" phrase ("just now", "yesterday", "3 days ago")
+- [x] Rooted in the user's home only (shares `find_files`' containment check):
+      a folder outside home is REJECTED, so it can never crawl `C:\Windows` or
+      all of `C:\`; system/heavy dirs pruned (AppData, node_modules, .git, ...)
+- [x] Bounded everywhere: `days` coerced + clamped (a hallucinated `1e400`/
+      non-finite/negative value can't overflow the cutoff), caps on depth,
+      entries scanned, results shown, and a hard wall-clock time budget -- a
+      broad query stops early with a clear note instead of hanging the agent
+- [x] Hardened vs 8B hallucinations: no args is valid (whole home, last week),
+      wrong-type `days`/`folder`/`name` coerced, a "3 days" phrase parsed to a
+      number, bare-`*` name filter treated as no filter, un-stat-able files
+      skipped, paths forced to pure ASCII -- never raises, output stays ASCII
+- [x] Agent system prompt now steers "what did I work on / the file I was just
+      editing" to `recent_files`; the "Try:" line suggests "what did I work on
+      today"; all console output stays pure ASCII
+- [x] `tests/smoke.py recent` (in the safe set) covers the happy path + newest-
+      first ordering, the `days` window, the `name` filter, dir pruning, the
+      containment guard, ASCII-only output, the no-match message, and the
+      hallucination guards (junk/negative/overflow days, phrase parsing, wrong
+      types, bare-`*`, missing folder)
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
