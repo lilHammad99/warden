@@ -22,7 +22,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, camera, files, memory, registry, shell, system, web  # noqa
+        from jarvis.tools import apps, browser, camera, files, find, memory, registry, shell, system, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -144,6 +144,76 @@ def t_shell():
     check("shell wrong-type guards", wrong_types_dont_crash)
 
 
+def t_find():
+    """Exercises the find_files tool + its defenses against 8B hallucinations.
+    Uses a temp tree inside the user's home, so no models are needed and it
+    lives in the safe set."""
+    import os
+    import pathlib
+    from jarvis.tools import find  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    # build an isolated sandbox INSIDE the home folder (find only searches home)
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_find_smoke"
+    (sandbox / "sub").mkdir(parents=True, exist_ok=True)
+    (sandbox / "budget_2026.xlsx").write_text("x", encoding="utf-8")
+    (sandbox / "sub" / "my_cv.pdf").write_text("x", encoding="utf-8")
+    # a pruned dir that must NOT be descended into
+    (sandbox / "node_modules").mkdir(exist_ok=True)
+    (sandbox / "node_modules" / "budget_junk.xlsx").write_text("x", encoding="utf-8")
+
+    try:
+        def happy_path():
+            out = registry.dispatch("find_files", {"name": "budget", "folder": "jarvis_find_smoke"})
+            assert "budget_2026.xlsx" in out, out
+            # nested file found via recursion
+            deep = registry.dispatch("find_files", {"name": "cv", "folder": "jarvis_find_smoke"})
+            assert "my_cv.pdf" in deep, deep
+            return "found top-level + nested files"
+        check("find happy path", happy_path)
+
+        def wildcard():
+            out = registry.dispatch("find_files", {"name": "*.xlsx", "folder": "jarvis_find_smoke"})
+            assert "budget_2026.xlsx" in out, out
+            return "wildcard match ok"
+        check("find wildcard", wildcard)
+
+        def prunes_noise_dirs():
+            # node_modules is pruned, so its budget_junk.xlsx must not appear
+            out = registry.dispatch("find_files", {"name": "budget", "folder": "jarvis_find_smoke"})
+            assert "budget_junk.xlsx" not in out, f"node_modules not pruned: {out}"
+            return "noise dirs pruned"
+        check("find prunes noise dirs", prunes_noise_dirs)
+
+        def containment_guard():
+            # searching outside the home folder must be refused, not run
+            r = registry.dispatch("find_files", {"name": "config", "folder": "C:\\Windows"})
+            assert "only search inside your own folders" in r, r
+            return "escape outside home blocked"
+        check("find containment guard", containment_guard)
+
+        def hallucination_guards():
+            assert "Error" in registry.dispatch("find_files", {"name": ""})
+            assert "Error" in registry.dispatch("find_files", {})           # missing arg
+            assert "too broad" in registry.dispatch("find_files", {"name": "*"})
+            # wrong types / missing folder must not raise
+            registry.dispatch("find_files", {"name": 123, "folder": "jarvis_find_smoke"})
+            miss = registry.dispatch("find_files", {"name": "x", "folder": "jarvis_find_smoke/nope"})
+            assert "does not exist" in miss, miss
+            return "guards held"
+        check("find hallucination guards", hallucination_guards)
+
+        def no_match_is_friendly():
+            out = registry.dispatch("find_files", {"name": "zzzznotathing", "folder": "jarvis_find_smoke"})
+            assert "No files matching" in out, out
+            return "no-match message ok"
+        check("find no-match message", no_match_is_friendly)
+    finally:
+        import shutil
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def t_agent():
     from jarvis import config as c
     from jarvis.agent import Agent
@@ -243,9 +313,9 @@ def t_e2e():
 
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
-            "shell": t_shell, "agent": t_agent, "camera": t_camera,
-            "vision": t_vision, "tts": t_tts, "hud": t_hud,
-            "watch": t_watch, "e2e": t_e2e}
+            "shell": t_shell, "find": t_find, "agent": t_agent,
+            "camera": t_camera, "vision": t_vision, "tts": t_tts,
+            "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "safe"
@@ -253,7 +323,7 @@ if __name__ == "__main__":
         for fn in SECTIONS.values():
             fn()
     elif which == "safe":
-        t_imports(); t_tools(); t_memory(); t_shell()
+        t_imports(); t_tools(); t_memory(); t_shell(); t_find()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

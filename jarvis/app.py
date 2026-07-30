@@ -1,7 +1,17 @@
+import datetime
 import sys
 
 from . import config as config_mod
 from .agent import Agent
+
+
+def _greeting() -> str:
+    """A short, time-of-day greeting for the console (pure ASCII)."""
+    h = datetime.datetime.now().hour
+    part = ("morning" if 5 <= h < 12 else
+            "afternoon" if 12 <= h < 18 else
+            "evening" if 18 <= h < 22 else "night")
+    return f"Good {part}, sir. Jarvis is online and ready."
 
 BANNER = r"""
       _   _    ______     _____ ____
@@ -19,6 +29,7 @@ def main():
     # importing tool modules registers their tools
     from .tools import apps, files, system, web  # noqa: F401
     from .tools import camera  # noqa: F401
+    from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
     from .tools import shell  # noqa: F401
     from .tools import registry
@@ -59,7 +70,8 @@ def main():
     print(f"model: {cfg['models']['chat']} | vision: {cfg['models']['vision']}"
           f" | voice: {voice_status} | browser tools: {'on' if browser_ok else 'off'}")
     print(f"memory: {mem_status}  ({len(registry.specs())} tools online)")
-    print("Type your command ('exit' to quit). Try: start working / what do you see\n")
+    print(_greeting())
+    print("Type your command ('exit' to quit). Try: start working / find my resume / what do you see\n")
 
     while True:
         try:

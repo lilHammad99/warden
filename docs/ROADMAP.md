@@ -55,6 +55,22 @@
 - [x] `tests/smoke.py shell` (safe set) covers allowlist, injection, host
       validation and wrong-type guards
 
+### Phase 8 — Find files by name (2026-07-30)
+- [x] `find_files` tool (`jarvis/tools/find.py`): the model can locate a file
+      itself ("open my budget spreadsheet", "read my CV") instead of needing an
+      exact path, then act on it with the file/app tools — a real autonomy win
+- [x] Searches the user's home folder only; a start folder outside home is
+      REJECTED (containment check), so it can never crawl `C:\Windows` or `C:\`
+- [x] System/heavy dirs pruned (AppData, node_modules, .git, recycle bin, ...);
+      bounded by max depth, max entries scanned, max results, and a hard
+      wall-clock time budget — a broad query stops early with a clear note
+- [x] Hardened vs 8B hallucinations: wrong-type/empty/bare-`*` args rejected or
+      coerced, missing/permission-blocked folders skipped, never raises
+- [x] Startup now shows a time-of-day greeting ("Good evening, sir...") and
+      suggests "find my resume"; all console output stays pure ASCII
+- [x] `tests/smoke.py find` (in the safe set) covers matches, wildcards, dir
+      pruning, the containment guard, and the hallucination guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
