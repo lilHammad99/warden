@@ -1,4 +1,4 @@
-# HANDOFF — Jarvis build status (2026-07-30)
+# HANDOFF — Jarvis build status (2026-07-31)
 
 Read this first if you are a new Claude session taking over.
 
@@ -532,12 +532,47 @@ file -- completing the delete family and pairing with move_folder/copy_folder.
   bin, so it's deterministic and never touches the real Recycle Bin. Full safe set
   all PASS.
 
+## 2026-07-31 — Find duplicate files (Phase 33)
+
+Added `find_duplicates` (`jarvis/tools/duplicates.py`): a tidy-up / free-space
+member of the file family. `folder_size` tells the user WHAT is big, but nothing
+told them what is stored TWICE -- a real problem for a cluttered Downloads or a
+phone-photo dump, and one an 8B model can't spot by name (identical photos often
+have different names). Jarvis can now answer "find duplicate files", "am I storing
+anything twice", "what duplicates are in my Downloads", "clean up duplicate photos".
+- Finds files whose CONTENTS are byte-for-byte identical, groups them, and reports
+  how much space the extra copies waste. Fast AND correct: files are grouped by size
+  first (identical files must share a size) and only same-size groups are hashed; a
+  match is a streamed `hashlib.blake2b` over the whole file, so identical means the
+  bytes really match, not just the size. Pure stdlib, NO new dependency.
+- Read-only -- never moves/renames/deletes; points the user at `recycle_file` to
+  remove a copy (undoable). Reuses `organize._resolve_under_home` (containment: a
+  folder outside home, incl. a `..`-escape, is REJECTED) and `find._SKIP_DIRS`
+  (AppData/node_modules/.git/... pruned). Optional `folder` (default = whole home);
+  sets ranked by reclaimable space, each listing home-relative copy paths.
+- Bounded: walk depth / entries visited / files hashed / per-file size cap /
+  total-bytes-hashed cap / wall-clock budget -- stops early with a note rather than
+  hanging or thrashing the disk. Empty (0-byte) files ignored (no bogus "duplicates");
+  un-readable/vanished files skipped. Alt arg names (`path`/`directory`/`dir`/...),
+  wrong-type/file-source/missing-folder coerced or answered, output pure ASCII.
+  Never raises.
+- Wired into `app.py` imports (`from .tools import duplicates`) + the console "Try:"
+  line ("find duplicate files in my downloads"), and the agent system prompt
+  (find_duplicates after the open_folder bullet, stressing read-only + recycle_file
+  to actually remove a copy).
+- `tests/smoke.py duplicates` (safe set): content duplicates across different
+  names/folders (reclaimable total + biggest-set-first ordering), ignoring a
+  same-size/different-content pair AND empty files, dir pruning, whole-home default,
+  the no-duplicates message, alt arg names, containment (absolute + `..`-escape), a
+  file source + missing folder, ASCII-only, and the wrong-type/extra-arg guards. Full
+  safe set: 232 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 32 that is 57 without browser, 63 with. No tools are being silently
+after Phase 33 that is 58 without browser, 64 with. No tools are being silently
 dropped.
 
 ## How to test (in order)

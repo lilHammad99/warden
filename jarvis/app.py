@@ -41,6 +41,7 @@ def main():
     from .tools import dates  # noqa: F401
     from .tools import disk  # noqa: F401
     from .tools import document  # noqa: F401
+    from .tools import duplicates  # noqa: F401
     from .tools import explorer  # noqa: F401
     from .tools import extract  # noqa: F401
     from .tools import find  # noqa: F401
@@ -141,6 +142,7 @@ def main():
           "move my taxes folder into documents / "
           "copy my taxes folder into backups / "
           "how big is my downloads folder / "
+          "find duplicate files in my downloads / "
           "open my downloads folder / "
           "back up my documents into a zip / unzip my backup / "
           "delete that old draft to the recycle bin / "

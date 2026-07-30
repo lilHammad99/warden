@@ -849,6 +849,55 @@
       Bin call stays swapped for the hermetic fake, so the test is deterministic and
       never touches the user's real bin
 
+### Phase 33 — Find duplicate files (2026-07-31)
+- [x] `find_duplicates` tool (`jarvis/tools/duplicates.py`): a tidy-up / free-space
+      member of the file family. The family can LOCATE a file, REARRANGE it, back it
+      up / restore it, remove it and report folder usage (`folder_size`) -- but the
+      everyday "am I keeping the same file twice?" question was unanswerable, and an
+      8B model can't spot it by name (two identical photos often have different
+      names). Now Jarvis finds files whose CONTENTS are byte-for-byte identical,
+      groups them, and reports how much space the extra copies waste ("find
+      duplicate files", "am I storing anything twice", "what duplicates are in my
+      Downloads", "clean up duplicate photos") -- a real autonomy win, read-only, and
+      the natural companion to `folder_size` (what's big) and `recycle_file` (remove
+      a copy)
+- [x] Fast AND correct: two files can only be identical if they are the same size,
+      so files are grouped by size first and only same-size groups are actually
+      hashed; a match is a streamed content hash (`hashlib.blake2b` over the whole
+      file), so identical means the bytes really are identical, not just the size.
+      Pure standard library -- NO new dependency
+- [x] Give an optional `folder` (like 'Downloads' or 'Pictures'); with no folder it
+      checks the whole home folder. Duplicate sets are ranked by the space that
+      could be reclaimed (the copies beyond the first), and each set lists the copies
+      by their home-relative paths
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      folder outside home -- including a `..`-escape, resolved and re-checked -- is
+      REJECTED, so Jarvis can never scan `C:\Windows` or all of `C:\`; system/heavy
+      dirs pruned (AppData, node_modules, .git, ...)
+- [x] Read-only -- it never moves, renames or deletes anything; it points the user
+      at `recycle_file` to remove a copy (an undoable Recycle-Bin delete)
+- [x] Bounded everywhere: caps on walk depth, entries visited, files hashed, a
+      per-file size cap, a total-bytes-hashed cap and a hard wall-clock budget -- a
+      pathological "de-dupe everything" stops early with a clear note instead of
+      hanging the agent or reading the disk to death; empty (0-byte) files are
+      ignored so they can't pile up as bogus "duplicates"; un-readable / vanished
+      files are skipped
+- [x] Hardened vs 8B hallucinations: no args is valid (whole home), wrong-type
+      `folder` coerced, alt arg names accepted (`path`/`directory`/`dir`/...), a file
+      source and a missing folder surface as friendly messages, all output forced to
+      pure ASCII -- never raises, never changes anything
+- [x] Auto-registers via a new `duplicates` import in `app.py`; the agent system
+      prompt steers "find duplicates / am I storing anything twice / clean up
+      duplicate photos" to `find_duplicates`; the console "Try:" line suggests "find
+      duplicate files in my downloads"
+- [x] `tests/smoke.py duplicates` (in the safe set) covers finding content
+      duplicates across different names/folders (with reclaimable-space total +
+      biggest-set-first ordering), ignoring a same-size-but-different-content pair
+      and empty files, dir pruning, the whole-home default, the no-duplicates
+      message, alt arg names, the containment guard (absolute AND `..`-escape), a
+      file source + missing folder, ASCII-only output, and the wrong-type / extra-arg
+      guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -921,6 +970,11 @@
       bounded preview, understands `.jsonl`/`.ndjson` (and detects line-delimited
       `.json`), home-contained, bounded (file size / JSONL scan / keys listed /
       preview chars+lines / deep-nesting), ASCII-only
+- [x] File management: find duplicate files to tidy up / free space -- done in
+      Phase 33 (`find_duplicates`); pure stdlib (no dep), content-based (size-group
+      then `hashlib.blake2b`, so identical names aren't required), read-only, reports
+      reclaimable space + points at recycle_file, home-contained, pruned + bounded
+      (files hashed / per-file size / total bytes / wall-clock), ignores empty files
 - [ ] Structured data next: an Excel `.xlsx` reader (needs a dependency like
       openpyxl, which is NOT currently installed) so "how many rows in my
       workbook.xlsx" / "read sheet 2" works; read_csv already tells the user to

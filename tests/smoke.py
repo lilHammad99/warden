@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-movefolder, copyfolder, makefolder, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
+movefolder, copyfolder, makefolder, duplicates, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, textstats, spreadsheet, jsondata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, explorer, extract, files, find, jsondata, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, duplicates, explorer, extract, files, find, jsondata, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -1039,6 +1039,144 @@ def t_makefolder():
         check("make_folder hallucination guards", hallucination_guards)
     finally:
         org.MAX_NEW_DEPTH = saved_depth
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_duplicates():
+    """Exercises the find_duplicates tool (content-based duplicate finder) + its
+    defenses against 8B hallucinations. Read-only, works entirely inside a temp
+    tree in the user's home, so it is deterministic, needs no model, and lives
+    in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import duplicates  # noqa: F401  (register find_duplicates)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_dupe_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    (sandbox / "a").mkdir(parents=True, exist_ok=True)
+    (sandbox / "b").mkdir(parents=True, exist_ok=True)
+    (sandbox / "node_modules").mkdir(exist_ok=True)  # must be pruned
+
+    # A big triple-copy set (identical bytes, DIFFERENT names + folders) and a
+    # smaller double-copy set, plus a unique file and an empty file.
+    big = b"BIG" * 4096                                  # 12288 B each
+    small = b"small-payload"                             # 13 B each
+    (sandbox / "a" / "photo1.bin").write_bytes(big)
+    (sandbox / "b" / "photo_copy.bin").write_bytes(big)
+    (sandbox / "photo_again.bin").write_bytes(big)       # 3 identical copies
+    (sandbox / "a" / "note.txt").write_bytes(small)
+    (sandbox / "b" / "note (1).txt").write_bytes(small)  # 2 identical copies
+    (sandbox / "unique.bin").write_bytes(b"one of a kind here")
+    (sandbox / "empty1.bin").write_bytes(b"")            # empty: must be ignored
+    (sandbox / "empty2.bin").write_bytes(b"")            # empty: must be ignored
+    # a same-SIZE-but-different-CONTENT pair must NOT be reported as duplicates
+    (sandbox / "sz.bin").write_bytes(b"AAAAAAAA")        # 8 B
+    (sandbox / "diff.bin").write_bytes(b"BBBBBBBB")      # 8 B, different bytes
+
+    try:
+        def finds_content_duplicates():
+            out = registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_smoke"})
+            assert "Error" not in out, out
+            # two duplicate SETS found (the triple + the double)
+            assert "2 sets of duplicate files" in out, out
+            # reclaimable = 2*12288 (two extra big copies) + 1*13 (one extra small)
+            assert "24.0 KB" in out, out  # _human(24589) -> 24.0 KB
+            # biggest set first, and it names 3 copies of ~12 KB each
+            assert "Set 1: 3 copies of 12.0 KB each" in out, out
+            assert "Set 2: 2 copies of 13 B each" in out, out
+            # identical files with DIFFERENT names are matched by content
+            assert "photo1.bin" in out and "photo_copy.bin" in out, out
+            assert "photo_again.bin" in out, out
+            # the unique file and the same-size/different-content pair are NOT dupes
+            assert "unique.bin" not in out, out
+            assert "sz.bin" not in out and "diff.bin" not in out, out
+            # empty files are ignored, never reported as "duplicates"
+            assert "empty1.bin" not in out and "empty2.bin" not in out, out
+            # points the user at the safe delete path
+            assert "recycle_file" in out, out
+            return "content duplicates grouped, reclaimable space + ordering ok"
+        check("find_duplicates finds content duplicates", finds_content_duplicates)
+
+        def pruning_and_default_home():
+            # a duplicate hidden in a pruned dir must not be counted
+            (sandbox / "node_modules" / "photo_dup.bin").write_bytes(big)
+            out = registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_smoke"})
+            assert "node_modules" not in out, "pruned dir leaked into output"
+            assert "Set 1: 3 copies" in out, out  # still 3, not 4
+            # no-arg is valid: scans the whole home folder without crashing
+            out2 = registry.dispatch("find_duplicates", {})
+            assert "Error" not in out2, out2
+            assert ("your home folder" in out2), out2
+            return "pruning holds + whole-home default works"
+        check("find_duplicates pruning + home default", pruning_and_default_home)
+
+        def no_duplicates_message():
+            clean = home / "jarvis_dupe_clean"
+            shutil.rmtree(clean, ignore_errors=True)
+            clean.mkdir(parents=True, exist_ok=True)
+            (clean / "only.bin").write_bytes(b"just one file")
+            try:
+                out = registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_clean"})
+                assert "No duplicate files found" in out, out
+                assert "Nothing is stored twice" in out, out
+                return "no-duplicates -> friendly message"
+            finally:
+                shutil.rmtree(clean, ignore_errors=True)
+        check("find_duplicates no-duplicates message", no_duplicates_message)
+
+        def alt_arg_names():
+            out = registry.dispatch("find_duplicates", {"path": "jarvis_dupe_smoke"})
+            assert "sets of duplicate files" in out, out
+            out2 = registry.dispatch("find_duplicates", {"directory": "jarvis_dupe_smoke"})
+            assert "sets of duplicate files" in out2, out2
+            return "alt path/directory arg names handled"
+        check("find_duplicates alt arg names", alt_arg_names)
+
+        def containment_guard():
+            # scanning OUTSIDE the user's home must be refused
+            r = registry.dispatch("find_duplicates", {"folder": "C:\\Windows"})
+            assert "only work inside your own folders" in r, r
+            # a ..-escape out of home is also refused (resolved + re-checked)
+            r2 = registry.dispatch("find_duplicates",
+                {"folder": "jarvis_dupe_smoke/../../../Windows"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked"
+        check("find_duplicates containment guard", containment_guard)
+
+        def file_source_and_missing():
+            # pointed at a FILE (not a folder) -> friendly message, no crash
+            r = registry.dispatch("find_duplicates",
+                {"folder": "jarvis_dupe_smoke/unique.bin"})
+            assert "is a file" in r and "folder" in r, r
+            # a missing folder -> friendly message
+            r2 = registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_smoke/nope"})
+            assert "can't find" in r2, r2
+            return "file source + missing folder -> friendly messages"
+        check("find_duplicates file/missing guards", file_source_and_missing)
+
+        def output_is_ascii():
+            registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_smoke"}).encode("ascii")
+            registry.dispatch("find_duplicates", {}).encode("ascii")
+            registry.dispatch("find_duplicates", {"folder": "C:\\Windows"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("find_duplicates ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # wrong types / weird shapes must not raise
+            registry.dispatch("find_duplicates", {"folder": 123})
+            registry.dispatch("find_duplicates", {"folder": ["a"]})
+            registry.dispatch("find_duplicates", {"folder": {}})
+            registry.dispatch("find_duplicates", {"folder": None})
+            # an unexpected extra arg is dropped, the call still succeeds
+            out = registry.dispatch("find_duplicates",
+                {"folder": "jarvis_dupe_smoke", "reason": "curious"})
+            assert "sets of duplicate files" in out, out
+            return "guards held"
+        check("find_duplicates hallucination guards", hallucination_guards)
+    finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
@@ -3012,7 +3150,8 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
             "movefolder": t_movefolder, "copyfolder": t_copyfolder,
-            "makefolder": t_makefolder, "disk": t_disk, "document": t_document,
+            "makefolder": t_makefolder, "duplicates": t_duplicates,
+            "disk": t_disk, "document": t_document,
             "explorer": t_explorer,
             "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
@@ -3030,7 +3169,8 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder(); t_disk()
+        t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder()
+        t_duplicates(); t_disk()
         t_document(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
