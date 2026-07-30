@@ -51,6 +51,7 @@ def main():
     from .tools import reminders as reminder_store  # noqa: F401
     from .tools import search  # noqa: F401
     from .tools import shell  # noqa: F401
+    from .tools import spreadsheet  # noqa: F401
     from .tools import tasks as task_list  # noqa: F401
     from .tools import textstats  # noqa: F401
     from .tools import registry
@@ -130,6 +131,7 @@ def main():
           "convert 5 miles to km / remind me in 10 minutes to stretch / "
           "how many days until christmas / add milk to my to-do list / "
           "how many words is my essay.txt / "
+          "how many rows are in my data.csv / "
           "find my resume / read my resume.docx / "
           "which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "

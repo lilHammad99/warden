@@ -50,6 +50,14 @@ Rules:
   yourself; it is exact. Pass text for words the user gave you directly, or path
   for a file (a plain-text file, or a Word .docx / OpenDocument .odt document;
   find it with find_files first if you don't have the path).
+- Spreadsheets / data files: for ANY question about a CSV or TSV data file --
+  how many rows or columns it has, what its columns are, or to preview or
+  summarise it ("how many rows are in my sales data", "what columns are in this
+  spreadsheet", "show me the first few rows of expenses.csv") -- call read_csv
+  with path (and optionally rows for how many preview rows); it counts exactly,
+  where read_file only dumps raw text. Find the file with find_files first if you
+  don't have its path. Excel .xlsx is not supported yet (ask the user to save as
+  CSV).
 - Unit conversions: for ANY "convert X to Y" (miles to km, C to F, kg to lb,
   cups to ml, mph to km/h, GB to MB, etc.), call convert_units with value,
   from_unit and to_unit instead of guessing; it is always exact.

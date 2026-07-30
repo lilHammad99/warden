@@ -435,12 +435,44 @@ with `find_files`/`read_document` (locate the essay, then size it up).
   guards, over-long-text truncation, ASCII-only, and the empty/missing/wrong-type
   guards. Full safe set: 184 checks, all PASS.
 
+## 2026-07-30 — Read / summarise CSV & TSV data files (Phase 30)
+
+Added `read_csv` (`jarvis/tools/spreadsheet.py`): structured-data handling, a
+DIFFERENT category from the well-covered folder-ops family and a step beyond
+`read_document` (Word/ODT prose). `read_file` only dumps a spreadsheet's raw
+bytes and the 8B model is hopeless at counting rows/columns, so Jarvis can now
+measure a CSV/TSV EXACTLY -- data-row count, column count, column names, and a
+preview of the first rows ("how many rows are in my sales data", "what columns
+are in this spreadsheet", "summarise my csv", "show me the first few rows").
+Natural partner to `find_files` (locate, then read).
+- Pure stdlib (`csv`), NO new dependency. `path` + optional `rows` (preview
+  count, default 5). Delimiter from extension (.tsv/.tab -> tab) or sniffed
+  (comma/semicolon/tab/pipe) with a cheap fallback; a BOM is stripped. First row
+  is treated as the header; blank rows aren't counted so the total is honest.
+- Reuses `organize._resolve_under_home` for containment (a path outside home,
+  incl. a `..`-escape, is REJECTED -> can't read `C:\Windows`). Bounded: file on
+  disk 25 MB, row scan 200k (stops early with a note), `csv.field_size_limit`
+  clamped (a lying mega-field can't exhaust memory), every column name / preview
+  cell truncated + forced to single-line ASCII.
+- Forgiving to 8B quirks: alt arg names (`file`/`document`/`source`/...),
+  wrong-type `path`/`rows` coerced or defaulted, an Excel `.xlsx`/`.xls` steered
+  to "save as CSV", a PDF/binary/NUL-byte file refused, folder/empty/missing ->
+  friendly messages. Read-only; never raises.
+- Wired into `app.py` imports (`from .tools import spreadsheet`) + the console
+  "Try:" line ("how many rows are in my data.csv"), and the agent system prompt
+  (read_csv for a CSV/TSV, after the count_words bullet).
+- `tests/smoke.py spreadsheet` (safe set): summarise a CSV (rows/cols/columns/
+  preview), the `rows` preview arg + default, blank rows not counted, a `.tsv`, a
+  sniffed semicolon delimiter, a header-only file, an empty file, Excel + NUL-byte
+  refusal, containment, folder + missing, the row-scan cap, ASCII-only, and the
+  empty/missing/wrong-type guards. Full safe set: 197 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 29 that is 54 without browser, 60 with. No tools are being silently
+after Phase 30 that is 55 without browser, 61 with. No tools are being silently
 dropped.
 
 ## How to test (in order)

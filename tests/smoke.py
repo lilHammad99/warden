@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
-dates, convert, textstats, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+dates, convert, textstats, spreadsheet, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
 """
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, explorer, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, explorer, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -2579,6 +2579,159 @@ def t_textstats():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def t_spreadsheet():
+    """Exercises the read_csv tool (summarise a CSV/TSV data file: row/column
+    counts, column names, preview) + its defenses against 8B hallucinations.
+    Builds a temp tree inside the user's home; deterministic, needs no model,
+    lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import spreadsheet as sp  # noqa: F401  (register read_csv)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_csv_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    (sandbox / "sales.csv").write_text(
+        "Date,Item,Amount\n"
+        "2026-01-01,Coffee,3.50\n"
+        "2026-01-02,Tea,2.00\n"
+        "2026-01-03,Cake,4.25\n", encoding="utf-8")
+    (sandbox / "many.csv").write_text(
+        "id,name\n" + "".join(f"{i},row{i}\n" for i in range(1, 7)),
+        encoding="utf-8")
+    (sandbox / "gappy.csv").write_text(
+        "a,b\n1,2\n\n3,4\n", encoding="utf-8")          # a blank interior row
+    (sandbox / "data.tsv").write_text(
+        "x\ty\n1\t2\n3\t4\n", encoding="utf-8")
+    (sandbox / "semi.csv").write_text(
+        "p;q;r\n1;2;3\n4;5;6\n", encoding="utf-8")
+    (sandbox / "headeronly.csv").write_text("h1,h2,h3\n", encoding="utf-8")
+    (sandbox / "empty.csv").write_text("", encoding="utf-8")
+    (sandbox / "accent.csv").write_text(
+        "name,city\ncafe,montreal\nrésumé,zürich\n", encoding="utf-8")
+    (sandbox / "book.xlsx").write_bytes(b"PK\x03\x04 not really xlsx")
+    (sandbox / "blob.csv").write_bytes(b"a,b\n1,\x00,2\n")   # NUL -> not text
+
+    saved_rows = sp.MAX_ROWS
+    try:
+        def happy_csv():
+            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/sales.csv"})
+            assert "sales.csv" in out, out
+            assert "3 data rows" in out and "3 columns" in out, out
+            assert "comma-separated" in out, out
+            assert "Date, Item, Amount" in out, out
+            assert "First 3 rows" in out and "Coffee" in out, out
+            return "summarised a CSV (rows/cols/columns/preview)"
+        check("read_csv summarises a CSV", happy_csv)
+
+        def preview_count():
+            deflt = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/many.csv"})
+            assert "6 data rows" in deflt and "First 5 rows" in deflt, deflt
+            limited = registry.dispatch(
+                "read_csv", {"path": "jarvis_csv_smoke/many.csv", "rows": 2})
+            assert "First 2 rows" in limited, limited
+            return "preview defaults to 5 and respects the rows arg"
+        check("read_csv preview row count", preview_count)
+
+        def blank_rows_skipped():
+            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/gappy.csv"})
+            assert "2 data rows" in out, out       # the blank interior row not counted
+            return "blank rows are not counted"
+        check("read_csv skips blank rows", blank_rows_skipped)
+
+        def tsv_file():
+            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/data.tsv"})
+            assert "2 data rows" in out and "2 columns" in out, out
+            assert "tab-separated" in out, out
+            return "read a tab-separated .tsv"
+        check("read_csv reads a TSV", tsv_file)
+
+        def semicolon_sniffed():
+            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/semi.csv"})
+            assert "3 columns" in out and "2 data rows" in out, out
+            assert "semicolon-separated" in out, out
+            return "sniffed a semicolon delimiter"
+        check("read_csv sniffs the delimiter", semicolon_sniffed)
+
+        def header_only():
+            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/headeronly.csv"})
+            assert "0 data rows" in out and "3 columns" in out, out
+            assert "No data rows to preview" in out, out
+            return "header-only file has 0 data rows"
+        check("read_csv header-only file", header_only)
+
+        def empty_file():
+            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/empty.csv"})
+            assert "empty" in out, out
+            return "empty file is a friendly message"
+        check("read_csv empty file", empty_file)
+
+        def refuses_excel_and_binary():
+            xl = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/book.xlsx"})
+            assert "Excel" in xl and "save it as CSV" in xl, xl
+            nul = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/blob.csv"})
+            assert "doesn't look like a text data file" in nul, nul
+            return "Excel steered + NUL-byte file refused"
+        check("read_csv refuses non-text files", refuses_excel_and_binary)
+
+        def containment_guard():
+            r = registry.dispatch("read_csv", {"path": "C:\\Windows\\win.ini"})
+            assert "only work inside your own folders" in r, r
+            return "escape outside home blocked"
+        check("read_csv containment guard", containment_guard)
+
+        def folder_and_missing():
+            fol = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke"})
+            assert "is a folder" in fol, fol
+            miss = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/ghost.csv"})
+            assert "can't find" in miss, miss
+            return "folder source + missing file are friendly messages"
+        check("read_csv folder + missing", folder_and_missing)
+
+        def row_scan_cap():
+            sp.MAX_ROWS = 2                    # header + 1 data row, then stop
+            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/many.csv"})
+            sp.MAX_ROWS = saved_rows
+            assert "stopped early" in out, out
+            return "a huge sheet stops early with a note"
+        check("read_csv row scan cap", row_scan_cap)
+
+        def output_is_ascii():
+            registry.dispatch(
+                "read_csv", {"path": "jarvis_csv_smoke/accent.csv"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("read_csv ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            assert "Error" in registry.dispatch("read_csv", {})
+            assert "Error" in registry.dispatch("read_csv", {"path": ""})
+            assert "Error" in registry.dispatch("read_csv", {"path": "   "})
+            # wrong types must not raise
+            registry.dispatch("read_csv", {"path": 123})
+            registry.dispatch("read_csv", {"path": ["a"]})
+            registry.dispatch("read_csv", {"path": {}})
+            registry.dispatch("read_csv", {"path": None})
+            # a wrong-type rows arg must not raise (falls back to default)
+            out = registry.dispatch(
+                "read_csv", {"path": "jarvis_csv_smoke/sales.csv", "rows": "junk"})
+            assert "3 data rows" in out, out
+            registry.dispatch(
+                "read_csv", {"path": "jarvis_csv_smoke/sales.csv", "rows": {}})
+            # an unexpected extra arg is dropped, the call still succeeds; alt name
+            out2 = registry.dispatch(
+                "read_csv", {"file": "jarvis_csv_smoke/sales.csv", "reason": "curious"})
+            assert "3 data rows" in out2, out2
+            return "guards held"
+        check("read_csv hallucination guards", hallucination_guards)
+    finally:
+        sp.MAX_ROWS = saved_rows
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
@@ -2589,6 +2742,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert, "textstats": t_textstats,
+            "spreadsheet": t_spreadsheet,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
@@ -2605,6 +2759,7 @@ if __name__ == "__main__":
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()
+        t_spreadsheet()
         t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

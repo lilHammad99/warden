@@ -720,6 +720,49 @@
       containment guard, a folder source + missing file, the over-long-text
       truncation, ASCII-only output, and the empty/missing/wrong-type guards
 
+### Phase 30 — Read / summarise CSV & TSV data files (2026-07-30)
+- [x] `read_csv` tool (`jarvis/tools/spreadsheet.py`): structured-data handling,
+      a different category from the folder-ops family and a step beyond
+      `read_document` (Word/ODT prose). `read_file` only dumps a spreadsheet's raw
+      text, so the 8B model was left to eyeball a data file and guess -- and it is
+      hopeless at counting rows or columns. Now Jarvis measures a CSV/TSV EXACTLY:
+      how many data rows, how many columns, the column names, and a preview of the
+      first rows ("how many rows are in my sales data", "what columns are in this
+      spreadsheet", "summarise my csv", "show me the first few rows of
+      expenses.csv") -- an accuracy/autonomy win and the natural partner to
+      `find_files` (locate the sheet, then read it)
+- [x] Pure standard library (`csv`): a CSV/TSV is plain text, so NO new
+      dependency. Give `path` (locate it first with find_files if unknown) and
+      optionally `rows` (how many preview rows to show, default 5). The delimiter
+      is taken from the extension (.tsv/.tab -> tab) or sniffed (comma / semicolon
+      / tab / pipe) with a cheap fallback
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      path outside home -- including a `..`-escape -- is REJECTED, so it can never
+      read a data file from `C:\Windows`
+- [x] Bounded everywhere: the file on disk is capped before reading (25 MB), the
+      row scan is capped (200k rows, stops early with a note), the `csv`
+      field-size limit is clamped so a lying mega-field can't exhaust memory, and
+      every listed column name / preview cell is truncated -- a giant or hostile
+      file can't flood the agent's context. Blank rows aren't counted so the row
+      total stays honest
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`file`/`document`/`source`/...), a
+      wrong-type `rows` falls back to the default, an Excel `.xlsx`/`.xls` file is
+      steered to "save as CSV", a PDF/binary/NUL-byte file is refused, a folder
+      source and a missing file surface as friendly messages, output forced to
+      pure ASCII -- never raises, never changes anything (read-only)
+- [x] Auto-registers via a new `spreadsheet` import in `app.py`; the agent system
+      prompt steers "how many rows / what columns / summarise this CSV" to
+      `read_csv`; the console "Try:" line suggests "how many rows are in my
+      data.csv"
+- [x] `tests/smoke.py spreadsheet` (in the safe set) covers summarising a CSV
+      (row/column counts, column names, preview), the `rows` preview arg + default,
+      blank rows not counted, a tab-separated `.tsv`, a sniffed semicolon
+      delimiter, a header-only file (0 data rows), an empty file, refusing
+      Excel + NUL-byte files, the containment guard, a folder source + missing
+      file, the row-scan cap (stops early), ASCII-only output, and the
+      empty/missing/wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -781,6 +824,14 @@
       Phase 29 (`count_words`); exact word/char/line/sentence counts + reading &
       speaking time, on pasted text OR a plain-text/Word/ODT file; home-contained,
       bounded, reuses read_document's extractor, ASCII-only
+- [x] Structured data: read / summarise a CSV or TSV data file -- done in Phase 30
+      (`read_csv`); pure stdlib (no dep), exact row/column counts + column names +
+      a preview, delimiter sniffed, home-contained, bounded (file size / row scan /
+      field size / cell truncation), Excel steered to CSV, ASCII-only
+- [ ] Structured data next: an Excel `.xlsx` reader (needs a dependency like
+      openpyxl, which is NOT currently installed) so "how many rows in my
+      workbook.xlsx" / "read sheet 2" works; read_csv already tells the user to
+      save as CSV. Same home-contained + bounded + ASCII care as read_csv
 - [ ] Document reading next: a PDF reader (needs a dependency like pypdf, which is
       NOT currently installed) so "read my resume.pdf"/"summarise this PDF" works;
       read_document already tells the user PDFs aren't supported yet. Same
