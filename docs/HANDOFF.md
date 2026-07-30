@@ -134,6 +134,30 @@ human "how long ago" phrase.
   ordering, days window, name filter, pruning, ASCII-only, containment guard,
   no-match message, hallucination guards). Full safe set: 48 tools, all PASS.
 
+## 2026-07-30 — Move, rename & copy files (Phase 19)
+
+Added `move_file` + `copy_file` (`jarvis/tools/organize.py`): the ACTION half of
+the file tools. find_files/search_files/recent_files let Jarvis LOCATE a file
+but it could only read/open it; now it can organise what it finds ("move the
+budget into Documents", "rename my resume to CV.pdf", "make a copy of my notes").
+- `move_file` moves a file into a folder OR renames it (a bare new name renames
+  inside the file's own folder); `copy_file` duplicates and keeps the original.
+  Deleting is deliberately NOT offered.
+- Reuses `find_files`' home-containment idea via a local `_resolve_under_home`:
+  BOTH source and destination must live inside the user's home, so it can never
+  move a file into `C:\Windows` or out of the user's folders. Never overwrites
+  (refuses if the destination exists); files only; `copy_file` has a 500 MB cap
+  (`org.MAX_COPY_BYTES`). Forgiving to 8B quirks: accepts from/to/path/new_name
+  aliases (via **extra), coerces wrong types, sanitises a bare new name of path
+  parts. All output forced to pure ASCII; never raises.
+- Wired into `app.py` imports + the console "Try:" line, and the agent system
+  prompt (move_file/copy_file after the find/search/recent bullet).
+- `tests/smoke.py organize` added to the safe set (move-into-folder, rename in
+  place, copy keeps original, never-overwrite, alt arg names, containment guard,
+  missing-source + folder-source messages, copy size cap, ASCII-only, and the
+  empty/missing/wrong-type guards). Full safe set: 44 tools (50 with browser),
+  all PASS.
+
 ## How to test (in order)
 
 ```

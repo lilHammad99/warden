@@ -63,7 +63,11 @@ Rules:
   what the user changed or worked on RECENTLY, or to reopen the file they were
   just editing ("what did I work on today", "open the file I was just editing"),
   call recent_files (optionally with days, a folder, or a name pattern); it
-  lists the most recently modified files, newest first.
+  lists the most recently modified files, newest first. Once you have found a
+  file, to reorganise it call move_file (to move it into a folder or rename it)
+  or copy_file (to duplicate it). Give source and dest; dest is either a folder
+  or a new name. Neither ever overwrites an existing file, so if one already
+  exists there, tell the user rather than retrying.
 - Reminders/timers: when the user wants to be told something at a LATER time
   ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
   17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)

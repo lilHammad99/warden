@@ -315,6 +315,39 @@
       hallucination guards (junk/negative/overflow days, phrase parsing, wrong
       types, bare-`*`, missing folder)
 
+### Phase 19 — Move, rename & copy files (2026-07-30)
+- [x] `move_file` / `copy_file` tools (`jarvis/tools/organize.py`): the ACTION
+      half of the file tools. The navigation family (`find_files` by name,
+      `search_files` by content, `recent_files` by time) let Jarvis LOCATE a
+      file but only read/open it; now it can actually organise what it finds
+      ("move the budget into Documents", "rename my resume to CV.pdf", "make a
+      copy of my notes") -- a real autonomy win that closes the loop
+- [x] `move_file` moves a file into a folder OR renames it (a bare new name
+      renames it inside its own folder, not off in the home root); `copy_file`
+      duplicates it and leaves the original in place. Deleting is deliberately
+      NOT offered
+- [x] Rooted in the user's home only (shares `find_files`' containment check):
+      BOTH the source and the destination are rejected unless they live inside
+      the user's home, so Jarvis can never move a file into `C:\Windows` or drag
+      one out of the user's own folders
+- [x] Never overwrites: if something already exists at the destination the move
+      or copy is REFUSED, so an 8B hallucination can never silently destroy an
+      existing file. Files only (a folder source is refused); `copy_file` refuses
+      a file above a 500 MB cap so a runaway copy can't hang or fill the disk
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`from`/`to`/`path`/`new_name`/...), a
+      bare new name sanitised of path parts, missing source and folder source
+      reported as friendly messages, all output forced to pure ASCII -- never
+      raises, never crashes the agent
+- [x] Agent system prompt now steers "move/rename/duplicate that file" to
+      move_file/copy_file (and to tell the user rather than retry when a file
+      already exists); the "Try:" line suggests "rename that file to
+      notes_final.txt"
+- [x] `tests/smoke.py organize` (in the safe set) covers move-into-folder,
+      rename-in-place, copy-keeps-original, the never-overwrite guard, alt arg
+      names, the containment guard, missing-source + folder-source messages, the
+      copy size cap, ASCII-only output, and the empty/missing/wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -340,6 +373,10 @@
       Phase 16 (`update_fact`)
 - [ ] Memory next steps: surface remembered facts in the HUD; let recall/update
       fuzzy-match wording, not just substrings
+- [x] File management: move/rename/copy a located file -- done in Phase 19
+      (`move_file`/`copy_file`)
+- [ ] File management next: opt-in delete-to-Recycle-Bin (needs a safe
+      confirm/undo path, e.g. send2trash), and moving whole folders
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

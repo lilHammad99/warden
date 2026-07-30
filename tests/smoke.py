@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
-Sections: imports, tools, memory, shell, find, search, recent, clipboard,
-tasks, calc, dates, convert, reminders, dispatch, agent, camera, vision, tts,
-hud, watch, e2e, all (default: safe set)
+Sections: imports, tools, memory, shell, find, search, recent, organize,
+clipboard, tasks, calc, dates, convert, reminders, dispatch, agent, camera,
+vision, tts, hud, watch, e2e, all (default: safe set)
 """
 
 import sys
@@ -24,7 +24,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, calc, camera, clipboard, convert, dates, files, find, memory, recent, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, browser, calc, camera, clipboard, convert, dates, files, find, memory, organize, recent, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -488,6 +488,146 @@ def t_recent():
         check("recent hallucination guards", hallucination_guards)
     finally:
         import shutil
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_organize():
+    """Exercises the move_file / copy_file tools (file management) + their
+    defenses against 8B hallucinations. Works entirely inside a temp tree in the
+    user's home (the only place these tools touch), so it is deterministic,
+    needs no model, and lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import organize as org  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_organize_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    (sandbox / "sub").mkdir(parents=True, exist_ok=True)
+
+    def mk(rel, text="x"):
+        p = sandbox / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    saved_cap = org.MAX_COPY_BYTES
+    try:
+        def move_into_folder():
+            mk("a.txt")
+            out = registry.dispatch("move_file",
+                {"source": "jarvis_organize_smoke/a.txt",
+                 "dest": "jarvis_organize_smoke/sub"})
+            assert "Moved" in out, out
+            assert (sandbox / "sub" / "a.txt").exists()
+            assert not (sandbox / "a.txt").exists(), "source not removed"
+            return "moved a file into a folder"
+        check("organize move into folder", move_into_folder)
+
+        def rename_in_place():
+            mk("old.txt")
+            # a bare new name renames the file inside its OWN folder
+            out = registry.dispatch("move_file",
+                {"source": "jarvis_organize_smoke/old.txt", "dest": "new.txt"})
+            assert "Renamed" in out, out
+            assert (sandbox / "new.txt").exists()
+            assert not (sandbox / "old.txt").exists()
+            return "renamed a file in place"
+        check("organize rename in place", rename_in_place)
+
+        def copy_duplicate_keeps_original():
+            mk("notes.txt", "hello")
+            out = registry.dispatch("copy_file",
+                {"source": "jarvis_organize_smoke/notes.txt",
+                 "dest": "notes_backup.txt"})
+            assert "Copied" in out, out
+            assert (sandbox / "notes.txt").exists(), "original vanished"
+            assert (sandbox / "notes_backup.txt").read_text(encoding="utf-8") == "hello"
+            return "duplicated a file, original kept"
+        check("organize copy duplicate", copy_duplicate_keeps_original)
+
+        def never_overwrites():
+            mk("src1.txt", "A")
+            mk("keep.txt", "B")
+            out = registry.dispatch("move_file",
+                {"source": "jarvis_organize_smoke/src1.txt", "dest": "keep.txt"})
+            assert "won't overwrite" in out, out
+            # the existing file is untouched and the source is left in place
+            assert (sandbox / "keep.txt").read_text(encoding="utf-8") == "B"
+            assert (sandbox / "src1.txt").exists()
+            return "refuses to overwrite an existing file"
+        check("organize never overwrites", never_overwrites)
+
+        def alt_arg_names():
+            # the model may use from/to instead of source/dest -> still works
+            mk("alt.txt")
+            out = registry.dispatch("move_file",
+                {"from": "jarvis_organize_smoke/alt.txt",
+                 "to": "jarvis_organize_smoke/sub"})
+            assert "Moved" in out, out
+            assert (sandbox / "sub" / "alt.txt").exists()
+            return "alt from/to arg names handled"
+        check("organize alt arg names", alt_arg_names)
+
+        def containment_guard():
+            # moving OUT of the user's home must be refused, not run
+            mk("esc.txt")
+            r = registry.dispatch("move_file",
+                {"source": "jarvis_organize_smoke/esc.txt",
+                 "dest": "C:\\Windows\\esc.txt"})
+            assert "only work inside your own folders" in r, r
+            assert (sandbox / "esc.txt").exists(), "source moved despite guard"
+            return "escape outside home blocked"
+        check("organize containment guard", containment_guard)
+
+        def missing_source_is_friendly():
+            r = registry.dispatch("move_file",
+                {"source": "jarvis_organize_smoke/ghost.txt", "dest": "x.txt"})
+            assert "can't find" in r, r
+            return "missing source is a friendly message"
+        check("organize missing source", missing_source_is_friendly)
+
+        def refuses_directory_source():
+            r = registry.dispatch("move_file",
+                {"source": "jarvis_organize_smoke/sub", "dest": "sub_renamed"})
+            assert "folder" in r and "only move or copy files" in r, r
+            return "a folder source is refused"
+        check("organize refuses directory source", refuses_directory_source)
+
+        def copy_size_cap():
+            org.MAX_COPY_BYTES = 4              # temporarily tiny
+            mk("big.txt", "0123456789")         # 10 bytes > 4
+            r = registry.dispatch("copy_file",
+                {"source": "jarvis_organize_smoke/big.txt", "dest": "big_copy.txt"})
+            assert "too large" in r, r
+            assert not (sandbox / "big_copy.txt").exists()
+            org.MAX_COPY_BYTES = saved_cap
+            return "oversized copy refused"
+        check("organize copy size cap", copy_size_cap)
+
+        def output_is_ascii():
+            mk("asc.txt")
+            registry.dispatch("move_file",
+                {"source": "jarvis_organize_smoke/asc.txt",
+                 "dest": "jarvis_organize_smoke/sub"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("organize ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # empty / missing args -> friendly error, never a crash
+            assert "Error" in registry.dispatch("move_file", {"source": "", "dest": "x"})
+            assert "Error" in registry.dispatch("move_file", {"source": "a", "dest": ""})
+            assert "Error" in registry.dispatch("move_file", {})
+            assert "Error" in registry.dispatch("copy_file", {})
+            # wrong types must not raise
+            registry.dispatch("move_file", {"source": 123, "dest": 456})
+            registry.dispatch("copy_file", {"source": ["a"], "dest": {}})
+            return "guards held"
+        check("organize hallucination guards", hallucination_guards)
+    finally:
+        org.MAX_COPY_BYTES = saved_cap
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
@@ -1100,7 +1240,7 @@ def t_e2e():
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
-            "recent": t_recent, "clipboard": t_clipboard,
+            "recent": t_recent, "organize": t_organize, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
@@ -1114,7 +1254,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_clipboard()
+        t_recent(); t_organize(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

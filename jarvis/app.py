@@ -40,6 +40,7 @@ def main():
     from .tools import dates  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
+    from .tools import organize  # noqa: F401
     from .tools import recent  # noqa: F401
     from .tools import reminders as reminder_store  # noqa: F401
     from .tools import search  # noqa: F401
@@ -122,7 +123,7 @@ def main():
           "convert 5 miles to km / remind me in 10 minutes to stretch / "
           "how many days until christmas / add milk to my to-do list / "
           "find my resume / which file mentions the wifi password / "
-          "what did I work on today / "
+          "what did I work on today / rename that file to notes_final.txt / "
           "actually my wifi password changed to hunter2\n")
 
     while True:
