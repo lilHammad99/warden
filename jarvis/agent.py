@@ -63,7 +63,12 @@ Rules:
   what the user changed or worked on RECENTLY, or to reopen the file they were
   just editing ("what did I work on today", "open the file I was just editing"),
   call recent_files (optionally with days, a folder, or a name pattern); it
-  lists the most recently modified files, newest first. Once you have found a
+  lists the most recently modified files, newest first. To READ a Word (.docx)
+  or OpenDocument (.odt) document -- a resume, letter, or report -- call
+  read_document with its path, NOT read_file (read_file only handles plain text
+  and returns unreadable data for these); find the file first with find_files if
+  you don't have its exact path, then summarise or answer from what it returns.
+  Once you have found a
   file, to reorganise it call move_file (to move it into a folder or rename it)
   or copy_file (to duplicate it). Give source and dest; dest is either a folder
   or a new name. Neither ever overwrites an existing file, so if one already

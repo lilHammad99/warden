@@ -40,6 +40,7 @@ def main():
     from .tools import convert  # noqa: F401
     from .tools import dates  # noqa: F401
     from .tools import disk  # noqa: F401
+    from .tools import document  # noqa: F401
     from .tools import explorer  # noqa: F401
     from .tools import extract  # noqa: F401
     from .tools import find  # noqa: F401
@@ -127,7 +128,8 @@ def main():
     print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
           "convert 5 miles to km / remind me in 10 minutes to stretch / "
           "how many days until christmas / add milk to my to-do list / "
-          "find my resume / which file mentions the wifi password / "
+          "find my resume / read my resume.docx / "
+          "which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "
           "make a folder called taxes in documents / "
           "move my taxes folder into documents / "

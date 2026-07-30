@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-movefolder, copyfolder, makefolder, disk, explorer, archive, extract, recycle, clipboard, tasks, calc,
+movefolder, copyfolder, makefolder, disk, document, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, explorer, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, document, explorer, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -1144,6 +1144,160 @@ def t_disk():
             assert "4 files" in out, out
             return "guards held"
         check("folder_size hallucination guards", hallucination_guards)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_document():
+    """Exercises the read_document tool (read Word .docx / OpenDocument .odt) +
+    its defenses against 8B hallucinations. Builds real .docx/.odt zips inside a
+    temp tree in the user's home, so it is deterministic, needs no model, and
+    lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    import zipfile
+    from jarvis.tools import document  # noqa: F401  (register read_document)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_doc_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    WNS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def _make_docx(name, paras):
+        body = "".join(
+            f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paras)
+        xml = (f'<?xml version="1.0"?><w:document xmlns:w="{WNS}">'
+               f"<w:body>{body}</w:body></w:document>")
+        with zipfile.ZipFile(sandbox / name, "w") as z:
+            z.writestr("word/document.xml", xml)
+
+    # a normal document, plus one with Word's curly quotes / em-dash / accent to
+    # prove the ASCII transliteration.
+    _make_docx("report.docx",
+               ["Hello sir, this is the budget report.",
+                "Total is “1200” euros — for the café."])
+    _make_docx("empty.docx", [""])
+
+    ONS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+    with zipfile.ZipFile(sandbox / "notes.odt", "w") as z:
+        z.writestr("content.xml",
+                   f'<?xml version="1.0"?><doc xmlns:text="{ONS}">'
+                   f"<text:h>Meeting notes</text:h>"
+                   f"<text:p>Buy milk and bread.</text:p></doc>")
+
+    try:
+        def happy_docx():
+            out = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/report.docx"})
+            assert "Hello sir, this is the budget report." in out, out
+            assert "word" in out and "report.docx" in out, out  # header
+            return "docx text extracted"
+        check("read_document reads a .docx", happy_docx)
+
+        def ascii_transliteration():
+            out = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/report.docx"})
+            out.encode("ascii")  # must be pure ASCII (would raise otherwise)
+            assert '"1200"' in out, out          # curly quotes -> straight
+            assert "cafe" in out, out            # accent stripped, not 'caf?'
+            assert "—" not in out and "?" not in out, out
+            return "curly quotes/dash/accent -> clean ASCII"
+        check("read_document ascii-only output", ascii_transliteration)
+
+        def reads_odt():
+            out = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/notes.odt"})
+            assert "Meeting notes" in out and "Buy milk and bread." in out, out
+            return "odt text extracted"
+        check("read_document reads a .odt", reads_odt)
+
+        def empty_document():
+            out = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/empty.docx"})
+            assert "no readable text" in out, out
+            return "empty doc -> friendly message"
+        check("read_document empty document", empty_document)
+
+        def alt_arg_names():
+            out = registry.dispatch("read_document", {"file": "jarvis_doc_smoke/report.docx"})
+            assert "budget report" in out, out
+            out2 = registry.dispatch("read_document", {"document": "jarvis_doc_smoke/report.docx"})
+            assert "budget report" in out2, out2
+            return "alt file/document arg names handled"
+        check("read_document alt arg names", alt_arg_names)
+
+        def unsupported_types():
+            (sandbox / "x.pdf").write_bytes(b"%PDF-1.4 fake")
+            r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/x.pdf"})
+            assert "PDF" in r and "Error" in r, r
+            (sandbox / "plain.txt").write_text("hi")
+            r2 = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/plain.txt"})
+            assert "read_file" in r2, r2
+            return "pdf + plain-text steered elsewhere"
+        check("read_document unsupported types", unsupported_types)
+
+        def corrupt_document():
+            (sandbox / "bad.docx").write_bytes(b"this is not a zip at all")
+            r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/bad.docx"})
+            assert "corrupt" in r or "isn't a valid" in r, r
+            return "corrupt/non-zip -> friendly, no raise"
+        check("read_document corrupt document", corrupt_document)
+
+        def containment_guard():
+            r = registry.dispatch("read_document", {"path": "C:\\Windows\\explorer.exe"})
+            assert "only work inside your own folders" in r, r
+            r2 = registry.dispatch("read_document",
+                {"path": "jarvis_doc_smoke/../../../Windows/x.docx"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked"
+        check("read_document containment guard", containment_guard)
+
+        def folder_and_missing():
+            r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke"})
+            assert "is a folder" in r, r
+            r2 = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/nope.docx"})
+            assert "can't find" in r2, r2
+            return "folder + missing -> friendly messages"
+        check("read_document folder/missing guards", folder_and_missing)
+
+        def size_and_xml_caps():
+            # shrink the uncompressed-xml cap: a normal doc is now refused as a
+            # zip-bomb guard (returns empty-text message, never raises/hangs).
+            orig = document.MAX_XML_BYTES
+            document.MAX_XML_BYTES = 1
+            try:
+                r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/report.docx"})
+                assert "no readable text" in r, r
+            finally:
+                document.MAX_XML_BYTES = orig
+            return "oversized document part refused"
+        check("read_document xml/size caps", size_and_xml_caps)
+
+        def truncation():
+            orig = document.MAX_CHARS
+            document.MAX_CHARS = 10
+            try:
+                r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/report.docx"})
+                assert "[truncated]" in r, r
+            finally:
+                document.MAX_CHARS = orig
+            return "long document truncated with a note"
+        check("read_document truncation", truncation)
+
+        def hallucination_guards():
+            # wrong types / weird shapes must not raise
+            registry.dispatch("read_document", {"path": 123})
+            registry.dispatch("read_document", {"path": ["a"]})
+            registry.dispatch("read_document", {"path": {}})
+            registry.dispatch("read_document", {"path": None})
+            assert "Error" in registry.dispatch("read_document", {"path": ""})
+            assert "Error" in registry.dispatch("read_document", {})  # missing arg
+            # an unexpected extra arg is dropped, call still succeeds
+            out = registry.dispatch("read_document",
+                {"path": "jarvis_doc_smoke/report.docx", "reason": "curious"})
+            assert "budget report" in out, out
+            return "guards held"
+        check("read_document hallucination guards", hallucination_guards)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -2300,7 +2454,8 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
             "movefolder": t_movefolder, "copyfolder": t_copyfolder,
-            "makefolder": t_makefolder, "disk": t_disk, "explorer": t_explorer,
+            "makefolder": t_makefolder, "disk": t_disk, "document": t_document,
+            "explorer": t_explorer,
             "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
@@ -2316,7 +2471,8 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder(); t_disk(); t_explorer()
+        t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder(); t_disk()
+        t_document(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()

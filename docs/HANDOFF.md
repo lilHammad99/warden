@@ -374,12 +374,43 @@ partner to move_folder and the backup counterpart to copy_file. Closes the
   over cap), ASCII-only, and the empty/missing/wrong-type guards. Full safe set:
   162 checks, all PASS.
 
+## 2026-07-30 — Read Word / OpenDocument documents (Phase 28)
+
+Added `read_document` (`jarvis/tools/document.py`): a DIFFERENT category from the
+now well-covered folder-ops family -- document READING. `read_file` only handles
+plain text, so pointed at a Word file it returns binary zip bytes; Jarvis can now
+actually read/summarise/answer about the documents the user has ("read my
+resume", "what does that letter say", "summarise this report"). Natural partner
+to `find_files` (locate, then read).
+- Reads `.docx` (Word) AND `.odt` (OpenDocument) -- both are a ZIP of XML, so it
+  is pure stdlib (`zipfile` + `xml.etree`), NO new dependency. docx text comes
+  from `<w:t>` in `word/document.xml`; odt from `<text:p>`/`<text:h>` in
+  `content.xml`.
+- Reuses `organize._resolve_under_home` for containment (a path outside home,
+  incl. a `..`-escape, is REFUSED -> can't read `C:\Windows`). Bounded: file on
+  disk 25 MB, UNCOMPRESSED document XML 60 MB (zip-bomb guard, refused before
+  read), paragraph count, and returned text 10000 chars (truncated + noted).
+- Pure ASCII AND readable: curly quotes/dashes transliterated, accents stripped
+  (cafe not caf?) via a punctuation map + NFKD. Corrupt/non-zip, PDF (steered to
+  "not yet"), plain-text (steered to read_file), folder source, missing file,
+  empty document -> friendly messages. Alt arg names (`file`/`document`/`doc`/
+  `source`/...), wrong-type/empty/missing args coerced or rejected. Never raises.
+- Wired into `app.py` imports (`from .tools import document`) + the console "Try:"
+  line ("read my resume.docx"), and the agent system prompt (read_document for a
+  Word/ODT document, NOT read_file).
+- `tests/smoke.py document` (safe set) builds real `.docx`/`.odt` zips: reads
+  each, the ASCII transliteration, empty document, alt arg names, unsupported
+  types (pdf + plain text steered elsewhere), corrupt/non-zip, containment
+  (absolute + `..`-escape), folder/missing guards, the xml/size caps (via a
+  temporary cap shrink), the truncation note, and the empty/missing/wrong-type
+  guards. Full safe set: 174 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 27 that is 52 without browser, 58 with. No tools are being silently
+after Phase 28 that is 53 without browser, 59 with. No tools are being silently
 dropped.
 
 ## How to test (in order)

@@ -644,6 +644,43 @@
       cap (nothing written when over cap), ASCII-only output, and the
       empty/missing/wrong-type guards
 
+### Phase 28 — Read Word / OpenDocument documents (2026-07-30)
+- [x] `read_document` tool (`jarvis/tools/document.py`): a different category from
+      the folder-ops family -- document READING. `read_file` only understands
+      plain text, so pointed at a Word document it returns a wall of binary zip
+      bytes and Jarvis can say nothing useful. Now the model can actually read,
+      summarise, and answer questions about the documents the user really has
+      ("read my resume", "what does that letter say", "summarise this report") --
+      the natural partner to `find_files` (locate the document, then read it)
+- [x] Reads Microsoft Word `.docx` AND OpenDocument `.odt`, both of which are a
+      ZIP of XML, so it is pure standard library (`zipfile` + `xml.etree`) with NO
+      new dependency; give `path` (locate it first with find_files if unknown)
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      path outside home -- including a `..`-escape, resolved and re-checked -- is
+      REJECTED, so Jarvis can never read a document from `C:\Windows`
+- [x] Bounded everywhere: the file on disk (25 MB), the UNCOMPRESSED document XML
+      (60 MB, a zip-bomb guard that refuses a lying/huge part before reading it),
+      the paragraph count, and the returned text (10000 chars, truncated with a
+      note) are all capped -- a giant or hostile document can't exhaust memory or
+      flood the agent's context
+- [x] Pure ASCII out, and readable: Word's curly quotes/dashes are transliterated
+      and accents stripped (cafe, not caf?) via a punctuation map + NFKD normalise,
+      so real Word text reads cleanly and can never corrupt the console/context
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`file`/`document`/`doc`/`source`/...), a
+      corrupt/non-zip file, a PDF (steered to "not yet"), a plain-text file
+      (steered to read_file), a folder source, a missing file and an empty
+      document all surface as friendly messages -- never raises, never crashes
+- [x] Auto-registers via a new `document` import in `app.py`; the agent system
+      prompt steers "read/summarise that Word document" to read_document (NOT
+      read_file); the console "Try:" line suggests "read my resume.docx"
+- [x] `tests/smoke.py document` (in the safe set) builds real `.docx`/`.odt` zips
+      and covers reading each, the ASCII transliteration (curly quotes/dash/accent
+      -> clean ASCII), an empty document, alt arg names, unsupported types (pdf +
+      plain text steered elsewhere), a corrupt/non-zip file, the containment guard
+      (absolute AND `..`-escape), folder + missing guards, the xml/size caps, the
+      truncation note, and the empty/missing/wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -698,6 +735,13 @@
       after folder_size flags a heavy folder the user can jump straight to it --
       done in Phase 25 (`open_folder`); read-only, home-contained, reveals a file
       highlighted, hermetic-tested (no window opens in tests)
+- [x] Document reading: read Word `.docx` / OpenDocument `.odt` documents (not
+      just plain text) -- done in Phase 28 (`read_document`); pure stdlib (no dep),
+      home-contained, zip-bomb bounded, ASCII-transliterated
+- [ ] Document reading next: a PDF reader (needs a dependency like pypdf, which is
+      NOT currently installed) so "read my resume.pdf"/"summarise this PDF" works;
+      read_document already tells the user PDFs aren't supported yet. Same
+      home-contained + bounded + ASCII care as read_document
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)
