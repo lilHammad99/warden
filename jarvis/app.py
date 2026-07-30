@@ -20,6 +20,7 @@ def main():
     from .tools import apps, files, system, web  # noqa: F401
     from .tools import camera  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
+    from .tools import shell  # noqa: F401
     from .tools import registry
     try:
         from .tools import browser  # noqa: F401

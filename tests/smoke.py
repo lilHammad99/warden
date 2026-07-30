@@ -22,7 +22,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, browser, camera, files, memory, registry, system, web  # noqa
+        from jarvis.tools import apps, browser, camera, files, memory, registry, shell, system, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -96,6 +96,52 @@ def t_memory():
         assert mem._STORE.with_name("memory.corrupt.json").exists()
         return "corrupt store recovered"
     check("memory corrupt-store recovery", corrupt_store_recovers)
+
+
+def t_shell():
+    """Exercises the safe run_command tool + its defenses. No model needed."""
+    from jarvis.tools import shell  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    def happy_path():
+        out = registry.dispatch("run_command", {"command": "whoami"})
+        assert "Error" not in out and out.strip(), f"whoami gave: {out!r}"
+        assert registry.dispatch("run_command", {"command": "hostname"}).strip()
+        return "whoami/hostname ran"
+    check("shell happy path", happy_path)
+
+    def allowlist_blocks():
+        # anything not on the allowlist is refused, not run
+        for bad in ("del", "rm -rf /", "format c:", "shutdown", "powershell"):
+            r = registry.dispatch("run_command", {"command": bad})
+            assert "not an allowed command" in r, f"{bad!r} not blocked: {r}"
+        return "disallowed commands blocked"
+    check("shell allowlist", allowlist_blocks)
+
+    def injection_is_inert():
+        # shell metacharacters can't escape: only the first token is parsed,
+        # and it isn't on the allowlist, so the whole thing is refused
+        r = registry.dispatch("run_command", {"command": "ipconfig & del /q *"})
+        # 'ipconfig' IS allowed; the '& del ...' is ignored (never shelled)
+        assert "Error" not in r or "not an allowed" in r
+        r2 = registry.dispatch("run_command", {"command": "whoami; rm -rf ~"})
+        assert "not an allowed command" in r2  # 'whoami;' != 'whoami'...
+        return "injection inert"
+    check("shell injection inert", injection_is_inert)
+
+    def host_validation():
+        assert "needs a host" in registry.dispatch("run_command", {"command": "ping"})
+        bad = registry.dispatch("run_command", {"command": "ping", "target": "google.com & del *"})
+        assert "not a valid host" in bad, f"bad host not rejected: {bad}"
+        return "host arg validated"
+    check("shell host validation", host_validation)
+
+    def wrong_types_dont_crash():
+        assert "Error" in registry.dispatch("run_command", {"command": ""})
+        assert "Error" in registry.dispatch("run_command", {})
+        registry.dispatch("run_command", {"command": 123})  # must not raise
+        return "wrong-type args survived"
+    check("shell wrong-type guards", wrong_types_dont_crash)
 
 
 def t_agent():
@@ -197,8 +243,9 @@ def t_e2e():
 
 
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
-            "agent": t_agent, "camera": t_camera, "vision": t_vision,
-            "tts": t_tts, "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
+            "shell": t_shell, "agent": t_agent, "camera": t_camera,
+            "vision": t_vision, "tts": t_tts, "hud": t_hud,
+            "watch": t_watch, "e2e": t_e2e}
 
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "safe"
@@ -206,7 +253,7 @@ if __name__ == "__main__":
         for fn in SECTIONS.values():
             fn()
     elif which == "safe":
-        t_imports(); t_tools(); t_memory()
+        t_imports(); t_tools(); t_memory(); t_shell()
     else:
         SECTIONS[which]()
     print("\nFAILURES:", failures if failures else "none")

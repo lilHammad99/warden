@@ -32,6 +32,9 @@ Rules:
   lasting fact (a name, preference, schedule, or where something is), call
   remember with one short fact. If they refer to something from before, call
   recall. Anything under "Long-term memory" below is already known — use it.
+- For questions about this PC's network or running programs (IP address,
+  whether the internet is up, what's running), use run_command with a safe
+  command like ipconfig, ping, or tasklist.
 """
 
 MAX_TOOL_ROUNDS = 8
@@ -95,7 +98,7 @@ class Agent:
                             args = json.loads(args)
                         except json.JSONDecodeError:
                             args = {}
-                    status(f"[{name}]")
+                    status(f"...using {name.replace('_', ' ')}")
                     result = registry.dispatch(name, args)
                     self.messages.append(
                         {"role": "tool", "content": result, "tool_name": name}

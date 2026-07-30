@@ -43,6 +43,18 @@
 - [x] Startup line shows how many facts are remembered
 - [x] `tests/smoke.py memory` (in the safe set) covers the guards
 
+### Phase 7 — Safe shell access (2026-07-30)
+- [x] `run_command` tool (`jarvis/tools/shell.py`): lets Jarvis answer "what's
+      my IP", "is the internet up", "what's running" by running real commands
+- [x] Allowlist only (ipconfig, hostname, whoami, ver, tasklist, getmac,
+      systeminfo, netstat, ping, nslookup) — nothing destructive is reachable
+- [x] Runs with `shell=False` + fixed argv, so an 8B hallucination like
+      `ipconfig & del *` can never escape to cmd.exe; ping/nslookup hosts are
+      validated against a strict pattern; hard timeout + capped output
+- [x] Friendlier tool-activity readout in console/voice ("...using run command")
+- [x] `tests/smoke.py shell` (safe set) covers allowlist, injection, host
+      validation and wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
