@@ -67,7 +67,12 @@ Rules:
   file, to reorganise it call move_file (to move it into a folder or rename it)
   or copy_file (to duplicate it). Give source and dest; dest is either a folder
   or a new name. Neither ever overwrites an existing file, so if one already
-  exists there, tell the user rather than retrying. To create a new folder to
+  exists there, tell the user rather than retrying. To move or rename a WHOLE
+  FOLDER rather than a single file ("move my Taxes folder into Documents",
+  "rename my Projects folder to Archive"), call move_folder with source and dest;
+  it never overwrites or merges into an existing folder, and never moves a folder
+  inside one of its own subfolders -- use move_file for a single file. To create
+  a new folder to
   organise things ("make a folder called Taxes in Documents", "create a Projects
   folder on my Desktop"), call make_folder with path (e.g. 'Documents/Taxes');
   do this first if you need somewhere to move files into. To back up, archive, or zip

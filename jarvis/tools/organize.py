@@ -7,9 +7,11 @@ file it can actually organise it -- "move the budget spreadsheet into
 Documents", "rename my resume to CV.pdf", "make a copy of my notes" -- a real
 autonomy win.
 
-Two tools:
-- ``move_file``  -- move a file into a folder, or rename it.
-- ``copy_file``  -- duplicate a file (the original stays put).
+Tools:
+- ``move_file``    -- move a file into a folder, or rename it.
+- ``copy_file``    -- duplicate a file (the original stays put).
+- ``make_folder``  -- create a new folder to organise into.
+- ``move_folder``  -- move a WHOLE folder into another folder, or rename it.
 
 Safety model (strict, because an 8B local model WILL eventually pass junk, the
 wrong type, or try to clobber the wrong file):
@@ -321,3 +323,124 @@ def make_folder(path: str = "", parent: str = "", **extra) -> str:
         return f"Error: couldn't create that folder, sir ({_ascii(str(e))})."
 
     return f"Created folder {_ascii(str(target))}, sir."
+
+
+def _resolve_folder_pair(src_raw: str, dst_raw: str):
+    """Work out the concrete (source, target) folder paths for a folder move, or
+    an error. Both ends are kept inside the user's home; the destination may be a
+    folder to drop the source INTO, a bare new name (rename in place), or a full
+    new path. Never raises.
+
+    Folder moves carry extra footguns a file move does not, so this is stricter:
+    the source must be a real folder (not a file), never the home folder itself,
+    and the target may never land inside the source (moving a tree into one of
+    its own subfolders)."""
+    if not src_raw:
+        return None, None, "Error: tell me which folder to move, sir."
+    if not dst_raw:
+        return None, None, ("Error: tell me where to put it, sir -- a folder "
+                            "or a new name.")
+
+    src, err = _resolve_under_home(src_raw)
+    if src is None:
+        return None, None, err or "Error: that folder path isn't valid, sir."
+    home = Path(HOME).resolve()
+    if src == home:
+        return None, None, ("Error: that is your home folder, sir; I won't move "
+                            "the whole thing.")
+    if not src.exists():
+        return None, None, f"Error: I can't find '{_ascii(str(src))}', sir."
+    if not src.is_dir():
+        return None, None, (f"Error: '{_ascii(src.name)}' is a file, sir; use "
+                            "move_file for a single file, not move_folder.")
+
+    dst, err = _resolve_under_home(dst_raw)
+    if dst is None:
+        return None, None, err or "Error: that destination isn't valid, sir."
+
+    has_sep = ("/" in dst_raw) or ("\\" in dst_raw)
+    if dst.exists() and dst.is_dir() and dst != src:
+        target = dst / src.name              # drop the folder INTO this folder
+    elif not has_sep and not Path(dst_raw).is_absolute():
+        name = _safe_name(dst_raw)           # a bare new name -> rename in place
+        if not name:
+            return None, None, "Error: that new name isn't valid, sir."
+        target = src.parent / name
+    else:
+        target = dst                         # a full new path
+
+    # the final target must ALSO stay inside home (a bare name / new path could
+    # otherwise point elsewhere) -- re-resolve and re-check it.
+    tgt, err = _resolve_under_home(str(target))
+    if tgt is None:
+        return None, None, err or "Error: that destination isn't valid, sir."
+
+    # cap how deep the destination may be (a hallucinated path can't bury a whole
+    # tree absurdly deep in one call).
+    try:
+        depth = len(tgt.relative_to(home).parts)
+    except ValueError:
+        depth = MAX_NEW_DEPTH + 1
+    if depth > MAX_NEW_DEPTH:
+        return None, None, ("Error: that destination is nested too deeply, sir; "
+                            "give me a simpler location.")
+    return src, tgt, ""
+
+
+@tool(
+    "move_folder",
+    "Move a whole folder into another folder, or rename it. Use this when the "
+    "user asks to move, rename, or tidy up a FOLDER (not a single file) -- 'move "
+    "my Taxes folder into Documents', 'rename my Projects folder to Archive'. "
+    "Give source (the folder to move) and dest: dest can be a folder to move it "
+    "into, or a new name/path to rename it to. Only the user's own folders are "
+    "allowed, an existing folder is never overwritten or merged into, and a "
+    "folder is never moved inside one of its own subfolders. For a single file "
+    "use move_file instead.",
+    {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "description": "The folder to move, e.g. 'Desktop/Taxes'.",
+            },
+            "dest": {
+                "type": "string",
+                "description": "A folder to move it into (e.g. 'Documents') or a "
+                "new name/path to rename it to (e.g. 'Archive').",
+            },
+        },
+        "required": ["source", "dest"],
+    },
+)
+def move_folder(source: str = "", dest: str = "", **extra) -> str:
+    src_raw = _first_str(source, extra.get("from"), extra.get("src"),
+                         extra.get("path"), extra.get("folder"),
+                         extra.get("directory"), extra.get("dir"),
+                         extra.get("source_path"))
+    dst_raw = _first_str(dest, extra.get("destination"), extra.get("to"),
+                         extra.get("target"), extra.get("new_path"),
+                         extra.get("new_name"), extra.get("dest_path"),
+                         extra.get("into"))
+
+    src, target, err = _resolve_folder_pair(src_raw, dst_raw)
+    if err:
+        return err
+    if src == target:
+        return f"'{_ascii(src.name)}' is already there, sir."
+    # never move a folder into itself or one of its own subfolders -- that would
+    # lose or endlessly nest the tree.
+    if src in target.parents:
+        return (f"Error: I can't move '{_ascii(src.name)}' into itself, sir; "
+                "pick a folder outside it.")
+    if target.exists():
+        return (f"Error: '{_ascii(str(target))}' already exists, sir; I won't "
+                "overwrite or merge into it. Pick another name.")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(target))
+    except Exception as e:
+        return f"Error: couldn't move that folder, sir ({_ascii(str(e))})."
+
+    verb = "Renamed" if src.parent == target.parent else "Moved"
+    return f"{verb} folder {_ascii(src.name)} to {_ascii(str(target))}, sir."

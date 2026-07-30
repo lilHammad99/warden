@@ -314,13 +314,41 @@ follow-up after folder_size.
   arg guards -- via a hermetic fake so no real window opens. Full safe set: 139
   checks, all PASS.
 
+## 2026-07-30 — Move / rename a whole folder (Phase 26)
+
+Added `move_folder` (`jarvis/tools/organize.py`, alongside move_file/copy_file/
+make_folder): the organise family could rearrange a single FILE and CREATE a
+folder, but not move an existing FOLDER (move_file refuses a folder source). Now
+Jarvis can relocate or rename a whole tree ("move my Taxes folder into
+Documents", "rename my Projects folder to Archive") -- the natural partner to
+make_folder.
+- `source` (the folder) + `dest` (a folder to move INTO, or a bare new name/path
+  to rename to). A move within home is a fast rename (`shutil.move`).
+- Reuses `organize._resolve_under_home`: BOTH source AND dest must be inside home
+  (can't touch `C:\Windows` or leave the user's folders); the home folder itself
+  is never moved. Folder-specific hardening beyond move_file: never overwrites OR
+  merges into an existing dest folder, and **never moves a folder into one of its
+  own subfolders** (`src in target.parents` refused -- the footgun that loses/
+  nests the tree). A FILE source is refused and points the model at move_file;
+  dest depth capped (`MAX_NEW_DEPTH`, 12). Alt arg names (`from`/`to`/`into`/
+  `directory`/...), wrong-type/empty/missing args coerced or rejected, output
+  pure ASCII. Never raises.
+- Auto-registers via the already-present `organize` import in `app.py`; wired
+  into the agent system prompt (move_folder for a whole folder vs move_file for a
+  single file) and the console "Try:" line ("move my taxes folder into
+  documents").
+- `tests/smoke.py movefolder` (safe set): move-into-folder, rename-in-place,
+  never-overwrite/merge, refuse-into-own-subfolder, refuse-file-source, refuse-
+  home-folder, alt arg names, containment, missing source, ASCII-only, and the
+  empty/missing/wrong-type guards. Full safe set: 150 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 25 that is 50 without browser, 56 with (55 + `open_folder`). No
-tools are being silently dropped.
+after Phase 26 that is 51 without browser, 57 with. No tools are being silently
+dropped.
 
 ## How to test (in order)
 

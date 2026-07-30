@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-makefolder, disk, explorer, archive, extract, recycle, clipboard, tasks, calc,
+movefolder, makefolder, disk, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
@@ -630,6 +630,146 @@ def t_organize():
         check("organize hallucination guards", hallucination_guards)
     finally:
         org.MAX_COPY_BYTES = saved_cap
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_movefolder():
+    """Exercises the move_folder tool (move/rename a WHOLE folder) + its defenses
+    against 8B hallucinations. Works entirely inside a temp tree in the user's
+    home (the only place it touches), so it is deterministic, needs no model, and
+    lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import organize as org  # noqa: F401  (register move_folder)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_movefolder_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+
+    def mkdir(rel):
+        p = sandbox / rel
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def mkfile(rel, text="x"):
+        p = sandbox / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    try:
+        sandbox.mkdir(parents=True, exist_ok=True)
+
+        def move_into_folder():
+            mkfile("Taxes/receipt.txt", "r")
+            mkdir("Documents")
+            out = registry.dispatch("move_folder",
+                {"source": "jarvis_movefolder_smoke/Taxes",
+                 "dest": "jarvis_movefolder_smoke/Documents"})
+            assert "Moved folder" in out, out
+            assert (sandbox / "Documents" / "Taxes" / "receipt.txt").exists()
+            assert not (sandbox / "Taxes").exists(), "source folder not removed"
+            return "moved a whole folder into another folder"
+        check("movefolder move into folder", move_into_folder)
+
+        def rename_in_place():
+            mkfile("Old/inner.txt", "i")
+            # a bare new name renames the folder inside its OWN parent
+            out = registry.dispatch("move_folder",
+                {"source": "jarvis_movefolder_smoke/Old", "dest": "New"})
+            assert "Renamed folder" in out, out
+            assert (sandbox / "New" / "inner.txt").exists()
+            assert not (sandbox / "Old").exists()
+            return "renamed a folder in place"
+        check("movefolder rename in place", rename_in_place)
+
+        def never_overwrites():
+            mkfile("A/a.txt", "A")
+            mkdir("Dest/A")            # a folder named A already sits in Dest
+            out = registry.dispatch("move_folder",
+                {"source": "jarvis_movefolder_smoke/A",
+                 "dest": "jarvis_movefolder_smoke/Dest"})
+            assert "won't overwrite or merge" in out, out
+            assert (sandbox / "A" / "a.txt").exists(), "source moved despite guard"
+            return "refuses to merge into an existing folder"
+        check("movefolder never overwrites", never_overwrites)
+
+        def refuses_into_own_subfolder():
+            mkdir("Proj/sub")
+            r = registry.dispatch("move_folder",
+                {"source": "jarvis_movefolder_smoke/Proj",
+                 "dest": "jarvis_movefolder_smoke/Proj/sub"})
+            assert "into itself" in r, r
+            assert (sandbox / "Proj" / "sub").exists(), "tree damaged"
+            return "refuses moving a folder into its own subfolder"
+        check("movefolder refuses into own subfolder", refuses_into_own_subfolder)
+
+        def refuses_file_source():
+            mkfile("solo.txt", "s")
+            r = registry.dispatch("move_folder",
+                {"source": "jarvis_movefolder_smoke/solo.txt", "dest": "gone"})
+            assert "is a file" in r and "move_file" in r, r
+            assert (sandbox / "solo.txt").exists()
+            return "a file source is refused (points at move_file)"
+        check("movefolder refuses file source", refuses_file_source)
+
+        def refuses_home_folder():
+            r = registry.dispatch("move_folder",
+                {"source": str(home), "dest": "jarvis_movefolder_smoke/whoops"})
+            assert "home folder" in r, r
+            return "refuses to move the whole home folder"
+        check("movefolder refuses home folder", refuses_home_folder)
+
+        def alt_arg_names():
+            mkfile("Alt/z.txt", "z")
+            mkdir("Bin")
+            out = registry.dispatch("move_folder",
+                {"from": "jarvis_movefolder_smoke/Alt",
+                 "into": "jarvis_movefolder_smoke/Bin"})
+            assert "Moved folder" in out, out
+            assert (sandbox / "Bin" / "Alt" / "z.txt").exists()
+            return "alt from/into arg names handled"
+        check("movefolder alt arg names", alt_arg_names)
+
+        def containment_guard():
+            mkdir("Esc")
+            r = registry.dispatch("move_folder",
+                {"source": "jarvis_movefolder_smoke/Esc",
+                 "dest": "C:\\Windows\\Esc"})
+            assert "only work inside your own folders" in r, r
+            assert (sandbox / "Esc").exists(), "folder moved despite guard"
+            return "escape outside home blocked"
+        check("movefolder containment guard", containment_guard)
+
+        def missing_source_is_friendly():
+            r = registry.dispatch("move_folder",
+                {"source": "jarvis_movefolder_smoke/ghost", "dest": "x"})
+            assert "can't find" in r, r
+            return "missing source is a friendly message"
+        check("movefolder missing source", missing_source_is_friendly)
+
+        def output_is_ascii():
+            mkdir("Asc")
+            mkdir("AscDest")
+            registry.dispatch("move_folder",
+                {"source": "jarvis_movefolder_smoke/Asc",
+                 "dest": "jarvis_movefolder_smoke/AscDest"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("movefolder ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # empty / missing args -> friendly error, never a crash
+            assert "Error" in registry.dispatch("move_folder", {"source": "", "dest": "x"})
+            assert "Error" in registry.dispatch("move_folder", {"source": "a", "dest": ""})
+            assert "Error" in registry.dispatch("move_folder", {})
+            # wrong types must not raise
+            registry.dispatch("move_folder", {"source": 123, "dest": 456})
+            registry.dispatch("move_folder", {"source": ["a"], "dest": {}})
+            return "guards held"
+        check("movefolder hallucination guards", hallucination_guards)
+    finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
@@ -1999,6 +2139,7 @@ def t_e2e():
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
+            "movefolder": t_movefolder,
             "makefolder": t_makefolder, "disk": t_disk, "explorer": t_explorer,
             "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
@@ -2015,7 +2156,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_makefolder(); t_disk(); t_explorer()
+        t_recent(); t_organize(); t_movefolder(); t_makefolder(); t_disk(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()

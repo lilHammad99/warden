@@ -130,6 +130,7 @@ def main():
           "find my resume / which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "
           "make a folder called taxes in documents / "
+          "move my taxes folder into documents / "
           "how big is my downloads folder / "
           "open my downloads folder / "
           "back up my documents into a zip / unzip my backup / "

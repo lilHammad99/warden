@@ -563,6 +563,42 @@
       the wrong-type / extra-arg guards. The real Explorer launch is swapped for a
       hermetic fake, so no window ever opens during the test
 
+### Phase 26 — Move / rename a whole folder (2026-07-30)
+- [x] `move_folder` tool (`jarvis/tools/organize.py`, alongside move_file/
+      copy_file/make_folder): the organise family could move/rename a single FILE
+      and CREATE a folder, but not move an existing FOLDER. move_file refuses a
+      folder source, so "move my Taxes folder into Documents" or "rename my
+      Projects folder to Archive" was impossible. Now Jarvis can relocate or
+      rename a whole tree -- a real autonomy win that pairs with make_folder
+- [x] Give source (the folder) and dest: dest can be a folder to move it INTO,
+      or a bare new name/path to rename it to (a bare name renames it inside its
+      own parent). A move within the user's folders is a fast rename
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`):
+      BOTH the source folder AND the destination are rejected unless they live
+      inside the user's home, so Jarvis can never move a folder into `C:\Windows`
+      or drag one out of the user's own folders; the home folder itself is never
+      moved
+- [x] Never destructive: an existing destination folder is never overwritten OR
+      merged into (refused, so no silent clobber). **A folder is never moved into
+      one of its own subfolders** (`src in target.parents` is refused) -- the
+      classic footgun that would lose or endlessly nest the tree. Files are
+      refused (points the model at move_file), destination depth is capped
+      (`MAX_NEW_DEPTH`, 12)
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`from`/`to`/`into`/`directory`/...), a
+      bare new name sanitised of path parts, missing source and file source
+      reported as friendly messages, all output forced to pure ASCII -- never
+      raises, never crashes the agent
+- [x] Auto-registers via the already-present `organize` import in `app.py`; the
+      agent system prompt steers "move/rename a whole FOLDER" to move_folder (vs
+      move_file for a single file); the console "Try:" line suggests "move my
+      taxes folder into documents"
+- [x] `tests/smoke.py movefolder` (in the safe set) covers move-into-folder,
+      rename-in-place, the never-overwrite/merge guard, refusing to move a folder
+      into its own subfolder, refusing a file source, refusing to move the home
+      folder, alt arg names, the containment guard, the missing-source message,
+      ASCII-only output, and the empty/missing/wrong-type guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -603,8 +639,12 @@
 - [x] File management: report folder / disk usage -- done in Phase 24
       (`folder_size`); read-only, home-contained, pruned + bounded, lists the
       biggest items so the user knows what to tidy
-- [ ] File management next: moving whole folders with move_file; recycling whole
-      folders with recycle_file (needs the same care as files-only today)
+- [x] File management: move/rename a whole FOLDER -- done in Phase 26
+      (`move_folder`); home-contained, never overwrites/merges, never moves a
+      folder into its own subfolder, depth-capped, file source points at move_file
+- [ ] File management next: copying whole folders (a copy_folder counterpart to
+      move_folder, bounded on size/count); recycling whole folders with
+      recycle_file (needs the same care as files-only today)
 - [x] Disk-usage next: an `open_folder` tool (reveal a folder in Explorer) so
       after folder_size flags a heavy folder the user can jump straight to it --
       done in Phase 25 (`open_folder`); read-only, home-contained, reveals a file
