@@ -81,7 +81,11 @@ Rules:
   done with ("delete that draft", "remove the old screenshot", "bin my notes"),
   call recycle_file with path (the file); it goes to the Recycle Bin, so it is a
   safe, undoable delete -- there is no permanent-delete tool, and it only takes a
-  single file, never a whole folder.
+  single file, never a whole folder. To check how much disk space something is
+  using, or what is taking up room ("how big is my Downloads folder", "what's
+  taking up space in Documents"), call folder_size with an optional folder; it is
+  read-only and reports the total size, the file count, and the biggest items
+  inside.
 - Reminders/timers: when the user wants to be told something at a LATER time
   ("remind me in 10 minutes to ...", "set a timer for 5 minutes", "remind me at
   17:30 to ..."), call set_reminder with the text and EITHER minutes (a number)

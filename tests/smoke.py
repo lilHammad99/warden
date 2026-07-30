@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-makefolder, archive, extract, recycle, clipboard, tasks, calc, dates, convert,
+makefolder, disk, archive, extract, recycle, clipboard, tasks, calc, dates, convert,
 reminders, dispatch, agent, camera, vision, tts, hud, watch, e2e, all
 (default: safe set)
 """
@@ -25,7 +25,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, convert, dates, disk, extract, files, find, memory, organize, recent, recycle, registry, reminders, search, shell, system, tasks, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -738,6 +738,112 @@ def t_makefolder():
         check("make_folder hallucination guards", hallucination_guards)
     finally:
         org.MAX_NEW_DEPTH = saved_depth
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_disk():
+    """Exercises the folder_size tool (disk usage) + its defenses against 8B
+    hallucinations. Read-only, works entirely inside a temp tree in the user's
+    home, so it is deterministic, needs no model, and lives in the safe set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import disk  # noqa: F401  (register folder_size)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_disk_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    (sandbox / "big").mkdir(parents=True, exist_ok=True)
+    (sandbox / "small").mkdir(parents=True, exist_ok=True)
+    (sandbox / "node_modules").mkdir(exist_ok=True)  # must be pruned
+
+    # known sizes so totals + ordering are deterministic
+    (sandbox / "big" / "a.bin").write_bytes(b"x" * 4096)
+    (sandbox / "big" / "b.bin").write_bytes(b"x" * 4096)      # big = 8192 B
+    (sandbox / "small" / "c.bin").write_bytes(b"x" * 100)     # small = 100 B
+    (sandbox / "top.bin").write_bytes(b"x" * 500)             # a top-level file
+    (sandbox / "node_modules" / "junk.bin").write_bytes(b"x" * 999999)
+
+    try:
+        def totals_and_pruning():
+            out = registry.dispatch("folder_size", {"folder": "jarvis_disk_smoke"})
+            # 4 real files counted (a, b, c, top); node_modules pruned entirely
+            assert "4 files" in out, out
+            assert "node_modules" not in out, "pruned dir leaked into output"
+            # biggest item first: the 'big/' folder (8192 B) beats everything
+            first_line = [ln for ln in out.splitlines() if ln.startswith("- ")][0]
+            assert first_line.startswith("- big/"), first_line
+            return "total + prune + biggest-first ok"
+        check("folder_size totals + pruning + ordering", totals_and_pruning)
+
+        def default_is_whole_home():
+            # no folder arg is valid: it measures the whole home folder
+            out = registry.dispatch("folder_size", {})
+            assert "home folder" in out, out
+            assert "Error" not in out, out
+            return "no-arg -> whole home"
+        check("folder_size default (whole home)", default_is_whole_home)
+
+        def single_file():
+            # pointed at a file, it reports just that file's size
+            out = registry.dispatch("folder_size",
+                {"folder": "jarvis_disk_smoke/top.bin"})
+            assert "top.bin is 500 B" in out, out
+            return "single file size reported"
+        check("folder_size on a single file", single_file)
+
+        def empty_folder():
+            (sandbox / "empty").mkdir(exist_ok=True)
+            out = registry.dispatch("folder_size", {"folder": "jarvis_disk_smoke/empty"})
+            assert "empty" in out and "0 B" in out, out
+            return "empty folder -> 0 B"
+        check("folder_size empty folder", empty_folder)
+
+        def alt_arg_names():
+            out = registry.dispatch("folder_size", {"path": "jarvis_disk_smoke"})
+            assert "4 files" in out, out
+            out2 = registry.dispatch("folder_size", {"directory": "jarvis_disk_smoke"})
+            assert "4 files" in out2, out2
+            return "alt path/directory arg names handled"
+        check("folder_size alt arg names", alt_arg_names)
+
+        def containment_guard():
+            # measuring OUTSIDE the user's home must be refused
+            r = registry.dispatch("folder_size", {"folder": "C:\\Windows"})
+            assert "only work inside your own folders" in r, r
+            # a ..-escape out of home is also refused (resolved + re-checked)
+            r2 = registry.dispatch("folder_size",
+                {"folder": "jarvis_disk_smoke/../../../Windows"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked"
+        check("folder_size containment guard", containment_guard)
+
+        def missing_folder():
+            r = registry.dispatch("folder_size", {"folder": "jarvis_disk_smoke/nope"})
+            assert "can't find" in r, r
+            return "missing folder -> friendly message"
+        check("folder_size missing folder", missing_folder)
+
+        def output_is_ascii():
+            registry.dispatch("folder_size", {"folder": "jarvis_disk_smoke"}).encode("ascii")
+            registry.dispatch("folder_size", {}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("folder_size ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # wrong types / weird shapes must not raise
+            registry.dispatch("folder_size", {"folder": 123})
+            registry.dispatch("folder_size", {"folder": ["a"]})
+            registry.dispatch("folder_size", {"folder": {}})
+            registry.dispatch("folder_size", {"folder": None})
+            # an unexpected extra arg is dropped, call still succeeds
+            out = registry.dispatch("folder_size",
+                {"folder": "jarvis_disk_smoke", "reason": "curious"})
+            assert "4 files" in out, out
+            return "guards held"
+        check("folder_size hallucination guards", hallucination_guards)
+    finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
@@ -1769,7 +1875,7 @@ def t_e2e():
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
-            "makefolder": t_makefolder, "archive": t_archive,
+            "makefolder": t_makefolder, "disk": t_disk, "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert,
@@ -1784,7 +1890,7 @@ if __name__ == "__main__":
             fn()
     elif which == "safe":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
-        t_recent(); t_organize(); t_makefolder(); t_archive(); t_extract()
+        t_recent(); t_organize(); t_makefolder(); t_disk(); t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_reminders(); t_dispatch()
     else:

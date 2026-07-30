@@ -492,6 +492,41 @@
       (absolute AND `..`-escape), the depth cap, ASCII-only output, and the
       empty/whitespace/missing/wrong-type guards
 
+### Phase 24 — Folder / disk usage (2026-07-30)
+- [x] `folder_size` tool (`jarvis/tools/disk.py`): the "how much space is this
+      using?" member of the file family. The navigation tools LOCATE a file,
+      organise REARRANGES it, archive backs it up / restores it, and recycle
+      removes it -- but Jarvis had no idea which folder was eating the disk. Now
+      it can answer "how big is my Downloads folder", "what's taking up space in
+      Documents", "how much space is my Desktop using" and report the total size,
+      the file count, and the biggest items inside -- a real autonomy win, and
+      read-only so it can never change anything
+- [x] Give an optional `folder` (like 'Downloads'); with no folder it measures
+      the whole home folder. Pointed at a single file it just reports that file's
+      size. The biggest first-level items (subfolders + files) are listed
+      newest-largest-first with human sizes (B/KB/MB/GB/TB)
+- [x] Rooted in the user's home only (shares `find_files`' containment via
+      `organize._resolve_under_home`): a path outside home -- including a
+      `..`-escape, which is resolved and re-checked -- is REJECTED, so Jarvis can
+      never measure `C:\Windows` or all of `C:\`; system/heavy dirs pruned
+      (AppData, node_modules, .git, ...) so the total is relevant and the scan fast
+- [x] Bounded everywhere: caps on walk depth, entries visited, and a hard
+      wall-clock time budget -- a pathological "size everything" stops early with a
+      clear note instead of hanging the agent; un-stat-able / permission-blocked
+      files are skipped, never crash
+- [x] Hardened vs 8B hallucinations: no args is valid (whole home), wrong-type
+      `folder` coerced, alt arg names accepted (`path`/`directory`/`dir`/...), a
+      missing folder reported as a friendly message, all output forced to pure
+      ASCII -- never raises, never changes anything
+- [x] Agent system prompt now steers "how big / what's taking up space" to
+      `folder_size`; the console "Try:" line suggests "how big is my downloads
+      folder"
+- [x] `tests/smoke.py disk` (in the safe set) covers the happy path (exact total
+      + file count with a pruned `node_modules` excluded + biggest-first
+      ordering), the whole-home default, a single-file size, an empty folder, alt
+      arg names, the containment guard (absolute AND `..`-escape), the missing-
+      folder message, ASCII-only output, and the wrong-type / extra-arg guards
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -529,8 +564,13 @@
       home-contained, no permanent-delete path
 - [x] File management: create a new folder to organise into -- done in Phase 23
       (`make_folder`); home-contained, depth-capped, never overwrites a file
+- [x] File management: report folder / disk usage -- done in Phase 24
+      (`folder_size`); read-only, home-contained, pruned + bounded, lists the
+      biggest items so the user knows what to tidy
 - [ ] File management next: moving whole folders with move_file; recycling whole
       folders with recycle_file (needs the same care as files-only today)
+- [ ] Disk-usage next: an `open_folder` tool (reveal a folder in Explorer) so
+      after folder_size flags a heavy folder the user can jump straight to it
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

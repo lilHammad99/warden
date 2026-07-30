@@ -264,12 +264,37 @@ destination first and organise into it.
   containment (absolute + `..`-escape), depth cap, ASCII-only, and the
   empty/whitespace/missing/wrong-type guards. Full safe set: 121 checks, all PASS.
 
+## 2026-07-30 — Folder / disk usage (Phase 24)
+
+Added `folder_size` (`jarvis/tools/disk.py`): the "how much space is this using?"
+member of the file family (locate -> rearrange -> back up -> restore -> remove ->
+UNDERSTAND usage). Jarvis can now answer "how big is my Downloads folder", "what's
+taking up space in Documents", "how much space is my Desktop using" -- reporting a
+folder's total size, its file count, and the biggest items inside so the user
+knows what to tidy. Read-only: it never moves, writes or deletes anything.
+- Optional `folder` (default = whole home); pointed at a single file it reports
+  just that file's size. Reuses `organize._resolve_under_home` for containment
+  (a path outside home, incl. a `..`-escape, is REFUSED -> can't measure
+  `C:\Windows`) and `find._SKIP_DIRS` to prune AppData/node_modules/.git/... The
+  bytes are attributed to each first-level child so the "Biggest inside:" list is
+  meaningful. Human sizes (B/KB/MB/GB/TB), pure ASCII.
+- Bounded: depth / entries-scanned / wall-clock caps; a broad scan stops early
+  with a clear note. Wrong-type/alt-name (`path`/`directory`/`dir`/...) args
+  coerced; missing folder -> friendly message. Never raises, never mutates.
+- Wired into `app.py` imports + the console "Try:" line ("how big is my downloads
+  folder"), and the agent system prompt (folder_size after the recycle_file bullet).
+- `tests/smoke.py disk` (safe set): exact total + file count with a pruned
+  `node_modules` excluded + biggest-first ordering, whole-home default, single-
+  file size, empty folder, alt arg names, containment (absolute + `..`-escape),
+  missing-folder message, ASCII-only, wrong-type/extra-arg guards. Full safe set:
+  130 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 23 that is 48 without browser, 54 with (53 + `make_folder`). No
+after Phase 24 that is 49 without browser, 55 with (54 + `folder_size`). No
 tools are being silently dropped.
 
 ## How to test (in order)
