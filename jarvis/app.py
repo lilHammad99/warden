@@ -39,6 +39,7 @@ def main():
     from .tools import clipboard  # noqa: F401
     from .tools import compare  # noqa: F401
     from .tools import convert  # noqa: F401
+    from .tools import convertdata  # noqa: F401
     from .tools import dates  # noqa: F401
     from .tools import disk  # noqa: F401
     from .tools import document  # noqa: F401
@@ -141,6 +142,7 @@ def main():
           "how many rows are in my budget.xlsx / "
           "what's in my export.json / "
           "get models.chat from my config.json / "
+          "convert my data.csv to json / "
           "find my resume / read my resume.docx / read my resume.pdf / "
           "which file mentions the wifi password / "
           "what did I work on today / rename that file to notes_final.txt / "

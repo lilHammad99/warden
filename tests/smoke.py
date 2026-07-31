@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
-dates, convert, textstats, spreadsheet, jsondata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+dates, convert, textstats, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
 """
@@ -3896,6 +3896,205 @@ def t_jsondata():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def t_convertdata():
+    """Exercises the convert_data tool (convert a data file between CSV and JSON)
+    + its defenses against 8B hallucinations. Builds a temp tree inside the user's
+    home and reads back the WRITTEN files, so it is deterministic, needs no model,
+    and lives in the safe set."""
+    import json
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import convertdata as cd  # noqa: F401  (register convert_data)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_convert_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    def rel(name):
+        return f"jarvis_convert_smoke/{name}"
+
+    # a CSV with a header, two data rows, and a blank trailing row (must NOT count)
+    (sandbox / "data.csv").write_text(
+        "name,age,city\nthe user,30,Casablanca\nSara,25,Rabat\n\n", encoding="utf-8")
+    # JSON array of objects with a differing/extra key and an accented value
+    (sandbox / "people.json").write_text(json.dumps(
+        [{"name": "Zoe", "role": "dev"}, {"name": "café", "vip": True}]),
+        encoding="utf-8")
+    (sandbox / "nums.json").write_text("[1, 2, 3]", encoding="utf-8")
+    (sandbox / "scalar.json").write_text("42", encoding="utf-8")
+    (sandbox / "note.txt").write_text("hello", encoding="utf-8")
+    (sandbox / "empty.csv").write_text("", encoding="utf-8")
+
+    saved_rows = cd.MAX_ROWS
+    try:
+        def csv_to_json():
+            out = registry.dispatch("convert_data", {"source": rel("data.csv")})
+            assert "Converted" in out and "(2 rows)" in out and "JSON" in out, out
+            made = sandbox / "data.json"
+            assert made.exists(), "output file not written"
+            recs = json.loads(made.read_text(encoding="utf-8"))
+            assert recs == [
+                {"name": "the user", "age": "30", "city": "Casablanca"},
+                {"name": "Sara", "age": "25", "city": "Rabat"},
+            ], recs                       # blank row skipped, values kept as strings
+            return "CSV -> JSON array of objects, blank row not counted"
+        check("convert_data CSV -> JSON", csv_to_json)
+
+        def json_to_csv():
+            out = registry.dispatch("convert_data", {"source": rel("people.json")})
+            assert "Converted" in out and "(2 rows)" in out and "CSV" in out, out
+            raw = (sandbox / "people.csv").read_bytes()
+            assert raw.startswith(b"\xef\xbb\xbf"), "expected a UTF-8 BOM for Excel"
+            text = raw.decode("utf-8-sig")
+            lines = [ln for ln in text.splitlines() if ln]
+            # columns are the UNION of keys (name, role, vip), missing cells blank
+            assert lines[0] == "name,role,vip", lines
+            assert lines[1] == "Zoe,dev,", lines
+            assert lines[2].endswith(",,true"), lines   # bool -> true, role blank
+            return "JSON -> CSV, union columns + BOM + bool rendering"
+        check("convert_data JSON -> CSV", json_to_csv)
+
+        def explicit_jsonl_dest():
+            out = registry.dispatch("convert_data",
+                {"source": rel("data.csv"), "dest": "rows.jsonl"})
+            assert "Converted" in out and "JSON" in out, out
+            body = (sandbox / "rows.jsonl").read_text(encoding="utf-8")
+            recs = [json.loads(ln) for ln in body.splitlines() if ln.strip()]
+            assert len(recs) == 2 and recs[0]["name"] == "the user", recs
+            return "dest extension .jsonl -> JSON Lines output"
+        check("convert_data explicit dest / jsonl", explicit_jsonl_dest)
+
+        def array_of_scalars():
+            out = registry.dispatch("convert_data",
+                {"source": rel("nums.json"), "dest": "nums.csv"})
+            assert "Converted" in out, out
+            text = (sandbox / "nums.csv").read_text(encoding="utf-8-sig")
+            lines = [ln for ln in text.splitlines() if ln]
+            assert lines == ["value", "1", "2", "3"], lines   # single 'value' column
+            return "array of scalars -> single 'value' column"
+        check("convert_data array of scalars", array_of_scalars)
+
+        def alt_arg_names():
+            out = registry.dispatch("convert_data",
+                {"file": rel("data.csv"), "to": "alt.json"})
+            assert "Converted" in out and (sandbox / "alt.json").exists(), out
+            return "alt file/to arg names handled"
+        check("convert_data alt arg names", alt_arg_names)
+
+        def never_overwrite():
+            # data.json already exists from the first check -> refuse, don't clobber
+            before = (sandbox / "data.json").read_text(encoding="utf-8")
+            r = registry.dispatch("convert_data", {"source": rel("data.csv")})
+            assert "already exists" in r and "won't overwrite" in r, r
+            assert (sandbox / "data.json").read_text(encoding="utf-8") == before
+            return "existing output never overwritten"
+        check("convert_data never overwrites", never_overwrite)
+
+        def same_format_refused():
+            r = registry.dispatch("convert_data",
+                {"source": rel("data.csv"), "dest": "copy.tsv"})
+            assert "already a CSV" in r and "Error" in r, r
+            assert not (sandbox / "copy.tsv").exists()
+            return "CSV -> CSV refused (not a conversion)"
+        check("convert_data same-format refused", same_format_refused)
+
+        def non_tabular_refused():
+            r = registry.dispatch("convert_data", {"source": rel("scalar.json")})
+            assert "single value" in r and "Error" in r, r
+            assert not (sandbox / "scalar.csv").exists()
+            return "a scalar JSON can't become a table"
+        check("convert_data non-tabular JSON refused", non_tabular_refused)
+
+        def wrong_type_source():
+            r = registry.dispatch("convert_data", {"source": rel("note.txt")})
+            assert "only convert between CSV and JSON" in r, r
+            r2 = registry.dispatch("convert_data", {"source": rel("book.xlsx")})
+            # a non-existent path is caught before the type check -> friendly too
+            assert "Error" in r2, r2
+            return "unrecognised source type steered"
+        check("convert_data unrecognised source", wrong_type_source)
+
+        def unknown_dest_ext():
+            r = registry.dispatch("convert_data",
+                {"source": rel("data.csv"), "dest": "out.xml"})
+            assert "don't recognise" in r and "Error" in r, r
+            assert not (sandbox / "out.xml").exists()
+            return "unknown output extension refused"
+        check("convert_data unknown dest extension", unknown_dest_ext)
+
+        def empty_source():
+            r = registry.dispatch("convert_data", {"source": rel("empty.csv")})
+            assert "empty" in r, r
+            assert not (sandbox / "empty.json").exists()
+            return "empty file -> friendly message, nothing written"
+        check("convert_data empty source", empty_source)
+
+        def containment_guard():
+            # reading OUTSIDE home is refused
+            r = registry.dispatch("convert_data", {"source": "C:\\Windows\\x.csv"})
+            assert "only work inside your own folders" in r, r
+            # ..-escape source is refused
+            r2 = registry.dispatch("convert_data",
+                {"source": rel("../../../Windows/x.csv")})
+            assert "only work inside your own folders" in r2, r2
+            # writing OUTSIDE home is refused too (dest escapes)
+            r3 = registry.dispatch("convert_data",
+                {"source": rel("data.csv"), "dest": "C:\\Windows\\evil.json"})
+            assert "only work inside your own folders" in r3, r3
+            assert not pathlib.Path("C:\\Windows\\evil.json").exists()
+            return "source AND dest kept inside home"
+        check("convert_data containment guard", containment_guard)
+
+        def folder_and_missing():
+            r = registry.dispatch("convert_data", {"source": "jarvis_convert_smoke"})
+            assert "is a folder" in r, r
+            r2 = registry.dispatch("convert_data", {"source": rel("nope.csv")})
+            assert "can't find" in r2, r2
+            return "folder + missing source guarded"
+        check("convert_data folder/missing guards", folder_and_missing)
+
+        def row_cap():
+            # a file with more data rows than the cap is REFUSED, nothing written
+            cd.MAX_ROWS = 2
+            big = sandbox / "big.csv"
+            big.write_text("a\n1\n2\n3\n4\n", encoding="utf-8")
+            try:
+                r = registry.dispatch("convert_data", {"source": rel("big.csv")})
+                assert "too many rows" in r and "Error" in r, r
+                assert not (sandbox / "big.json").exists(), "no partial file"
+            finally:
+                cd.MAX_ROWS = saved_rows
+            return "row cap refuses before writing a partial file"
+        check("convert_data row-scan cap", row_cap)
+
+        def output_is_ascii():
+            registry.dispatch("convert_data",
+                {"source": rel("people.json"), "dest": "p2.csv"}).encode("ascii")
+            registry.dispatch("convert_data", {"source": rel("scalar.json")}).encode("ascii")
+            registry.dispatch("convert_data", {"source": "C:\\Windows\\x.csv"}).encode("ascii")
+            return "reply stayed pure ASCII even with accented data"
+        check("convert_data ascii-only reply", output_is_ascii)
+
+        def hallucination_guards():
+            # wrong types / weird shapes must not raise, just come back as strings
+            for bad in (123, ["a"], {}, None, True):
+                assert isinstance(registry.dispatch("convert_data", {"source": bad}), str)
+            assert "Error" in registry.dispatch("convert_data", {"source": ""})
+            assert "Error" in registry.dispatch("convert_data", {})   # missing arg
+            # a stray extra arg is dropped; the call still succeeds
+            out = registry.dispatch("convert_data",
+                {"source": rel("data.csv"), "dest": "extra.json", "reason": "curious"})
+            assert "Converted" in out, out
+            return "guards held"
+        check("convert_data hallucination guards", hallucination_guards)
+    finally:
+        cd.MAX_ROWS = saved_rows
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
@@ -3909,6 +4108,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert, "textstats": t_textstats,
             "spreadsheet": t_spreadsheet, "jsondata": t_jsondata,
+            "convertdata": t_convertdata,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
@@ -3926,7 +4126,7 @@ if __name__ == "__main__":
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()
-        t_spreadsheet(); t_jsondata()
+        t_spreadsheet(); t_jsondata(); t_convertdata()
         t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

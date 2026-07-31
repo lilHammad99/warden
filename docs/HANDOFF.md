@@ -745,12 +745,54 @@ partner to `find_files`.
   parsing checks are GUARDED behind openpyxl being importable so the safe set
   passes clean either way. Full safe set: 284 checks, all PASS.
 
+## 2026-07-31 — Convert data files between CSV and JSON (Phase 39)
+
+Added `convert_data` (`jarvis/tools/convertdata.py`): a NEW category -- text/data
+TRANSFORMATION. The data family could READ files (read_csv / read_json /
+read_excel) but never TRANSFORM one; turning a CSV into JSON, or JSON back into a
+spreadsheet a person can open in Excel, is an everyday chore the 8B model can't do
+by hand without hallucinating rows or mangling quoting. Now Jarvis does it exactly
+("convert my data.csv to json", "turn this json into a csv so I can open it in
+Excel", "export my contacts.json as csv"). Natural next step after the reading
+family; partners with find_files.
+- Pure stdlib (`csv` + `json`), NO new dependency. CSV/TSV -> JSON (header row ->
+  object keys; array of objects, or one object per line for a `.jsonl` dest).
+  JSON/JSONL -> CSV (array of objects/single object/array of scalars -> a sheet;
+  columns are the union of keys, one row per record). Output written UTF-8 with a
+  BOM so Excel shows accents right. CSV values stay strings (never guesses a
+  number, so '007' isn't corrupted).
+- Reuses `organize._resolve_under_home` for containment (BOTH source AND dest,
+  incl. a `..`-escape, REJECTED outside home -> can't read from or write into
+  `C:\Windows`), `spreadsheet._pick_delimiter` (delimiter sniff) and
+  `jsondata._load_value` (the shared JSON reader/validator/parser, incl. JSONL
+  detection). Never overwrites; the output can never be the source. **Atomic
+  write** (`.part` temp then `os.replace`, temp cleaned on failure). Bounded: file
+  25 MB, rows 200k, columns 2000 -- REFUSED before writing anything if a cap is
+  exceeded (no partial/misleading file).
+- Forgiving to 8B quirks: alt arg names (`file`/`from`/`input`/`to`/`output`/...),
+  a `format` hint, wrong-type/empty/missing args coerced or rejected; an Excel
+  `.xlsx` steered to read_excel, a non-tabular JSON scalar refused with a reason,
+  an unknown output extension refused, a same-format ("CSV to CSV") request
+  refused, folder/missing/empty source answered. The tool's reply is pure ASCII
+  (the written FILE keeps the real UTF-8 data). Never raises.
+- Wired into `app.py` imports (`from .tools import convertdata`) + the console
+  "Try:" line ("convert my data.csv to json"), and the agent system prompt
+  (convert_data transforms the file, vs read_csv/read_json which only summarise).
+- `tests/smoke.py convertdata` (safe set) reads back the WRITTEN files: CSV->JSON
+  (blank row not counted, values kept as strings), JSON->CSV (union columns + BOM +
+  bool), a `.jsonl` output, array-of-scalars -> single 'value' column, alt arg
+  names, never-overwrite, same-format/non-tabular/unknown-dest refusals, empty
+  source, containment (source AND dest, absolute + `..`-escape), folder + missing,
+  the row cap (nothing written when over cap), ASCII-only reply, and the
+  empty/missing/wrong-type guards. Full safe set: 300 checks, all PASS. No new
+  dependency added.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 38 that is 63 without browser, 69 with (read_excel added one). No
+after Phase 39 that is 64 without browser, 70 with (convert_data added one). No
 tools are being silently dropped.
 
 ## How to test (in order)

@@ -73,6 +73,15 @@ Rules:
   "get models.chat from settings.json", "what is the first user's email"), call
   get_json_value with path and key, where key is a dotted path (dots go into
   objects, numbers pick a list position), e.g. 'models.chat' or 'users.0.email'.
+- Converting data files: when the user wants to TURN a data file into another
+  format -- a CSV/TSV into JSON, or a JSON/JSONL into a CSV spreadsheet ("convert
+  my data.csv to json", "turn this json into a csv so I can open it in Excel",
+  "export my contacts.json as csv") -- call convert_data with source (the file;
+  find it with find_files first if you don't have the path) and optionally dest
+  (a name or path whose extension, .json/.csv/.jsonl/.tsv, sets the output
+  format). It writes a NEW file and never overwrites an existing one; the
+  original is left as-is. This transforms the file, unlike read_csv/read_json
+  which only summarise it. For an Excel .xlsx workbook use read_excel.
 - Unit conversions: for ANY "convert X to Y" (miles to km, C to F, kg to lb,
   cups to ml, mph to km/h, GB to MB, etc.), call convert_units with value,
   from_unit and to_unit instead of guessing; it is always exact.

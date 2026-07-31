@@ -1127,6 +1127,55 @@
       workbook-parsing checks are GUARDED behind openpyxl being importable so the
       safe set passes clean either way. Full safe set: 284 checks, all PASS
 
+### Phase 39 — Convert a data file between CSV and JSON (2026-07-31)
+- [x] `convert_data` tool (`jarvis/tools/convertdata.py`): text/data
+      TRANSFORMATION -- a new category. The data family could READ files
+      (`read_csv`, `read_json`, `read_excel`) but never TRANSFORM one, and turning
+      a CSV into JSON (or JSON back into a spreadsheet a person can open in Excel)
+      is an everyday chore an 8B local model cannot do reliably by hand (it would
+      hallucinate rows, drop fields, mangle quoting). Now Jarvis does it exactly
+      ("convert my data.csv to json", "turn this json into a csv so I can open it
+      in Excel", "export my contacts.json as csv") -- the natural next step after
+      the reading family and the partner to `find_files`
+- [x] Pure standard library (`csv` + `json`), NO new dependency. CSV/TSV -> JSON:
+      the first row is the header, each later row becomes a JSON object (an array
+      of objects, or one object per line if the output is `.jsonl`). JSON/JSONL ->
+      CSV: an array of objects (or a single object, or an array of scalars) becomes
+      a spreadsheet -- columns are the union of the object keys, one row per record.
+      Written UTF-8 with a BOM so Excel opens accents correctly. CSV values stay
+      strings (never guesses a number, so a zip code like '007' isn't corrupted)
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`):
+      BOTH the source AND the destination -- including a `..`-escape, resolved and
+      re-checked -- are REJECTED unless inside the user's home, so Jarvis can never
+      read from or write into `C:\Windows` or outside the user's own folders
+- [x] Never overwrites (an existing destination is refused; the output can never
+      be the source itself); **atomic write** (to a `.part` temp then `os.replace`,
+      and the temp is cleaned up on failure) so a crash never leaves a half-written
+      file. Bounded: file size (25 MB), row count (200k) and column count (2000) are
+      all capped and the conversion is REFUSED before writing anything if a cap is
+      exceeded -- a giant/hostile file can't exhaust memory, fill the disk, or leave
+      a misleading partial file
+- [x] Hardened vs 8B hallucinations: empty/missing/wrong-type args coerced or
+      rejected, alt arg names accepted (`file`/`from`/`input`/`to`/`output`/...),
+      an Excel `.xlsx` steered to read_excel/"save as CSV", a non-tabular JSON
+      scalar refused with a clear reason, an unknown output extension refused, a
+      same-format ("CSV to CSV") request refused, a folder/missing/empty source
+      answered -- the tool's reply is pure ASCII (the written file keeps the real
+      UTF-8 data). Never raises
+- [x] Auto-registers via a new `convertdata` import in `app.py`; the agent system
+      prompt steers "convert/turn/export this data file to the other format" to
+      `convert_data` (transforms the file, unlike read_csv/read_json which only
+      summarise); the console "Try:" line suggests "convert my data.csv to json"
+- [x] `tests/smoke.py convertdata` (in the safe set) reads back the WRITTEN files:
+      CSV -> JSON array of objects (blank row not counted, values kept as strings),
+      JSON -> CSV (union columns + UTF-8 BOM + bool rendering), a `.jsonl` output,
+      an array of scalars -> single 'value' column, alt arg names, the never-
+      overwrite guard, the same-format + non-tabular + unknown-dest-extension
+      refusals, an empty source, the containment guard (source AND dest, absolute
+      AND `..`-escape), folder + missing guards, the row cap (nothing written when
+      over cap), ASCII-only reply, and the empty/missing/wrong-type guards. Full
+      safe set: 300 checks, all PASS
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1233,6 +1282,12 @@
       friendly message). Home-contained, bounded (file size / pages / wall-clock /
       returned chars), ASCII-transliterated, handles password-protected + scanned +
       corrupt PDFs gracefully; read_document now steers a .pdf here
+- [x] Text/data transformation: convert a data file between CSV and JSON -- done
+      in Phase 39 (`convert_data`); pure stdlib (no dep), CSV/TSV <-> JSON/JSONL,
+      home-contained (source AND dest), never overwrites, atomic write, bounded
+      (file size / rows / columns, refused before writing a partial file), ASCII
+      reply / real-UTF-8 file, handles non-tabular JSON + Excel + unknown types
+      gracefully
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)
