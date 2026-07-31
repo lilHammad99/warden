@@ -29,6 +29,12 @@ def _resolve(path: str) -> Path:
 )
 def write_file(path: str, content: str) -> str:
     p = _resolve(path)
+    if p.suffix.lower() == ".pdf":
+        # writing text into a .pdf makes a file no viewer can open; send the
+        # model to the tool that writes a real PDF instead
+        return ("Error: I can't make a real PDF with write_file, sir -- that "
+                "would create a file that won't open. Use create_pdf for a "
+                "PDF (a CV, letter, or report).")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return f"Wrote {len(content)} characters to {p}"

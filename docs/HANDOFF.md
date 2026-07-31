@@ -996,6 +996,38 @@ Pre-existing, still open (NOT caused by this change, out of scope here):
 checks fail transiently when another app holds the Windows clipboard ("clipboard
 is busy").
 
+## 2026-07-31 — Fix: PDFs that won't open + Jarvis went mute after one line
+
+the user reported (a) a written PDF (his CV) won't open and (b) Jarvis still can't
+talk aloud. Both root-caused and fixed.
+
+1. **"PDF won't open."** There was NO pdf-WRITER tool — only `read_pdf` and
+   `write_file`. Asked for a CV "as a PDF", the model called `write_file` with a
+   `.pdf` name, which just dumps raw text; those bytes aren't a PDF, so no viewer
+   opens it. Fix: new `create_pdf` (`jarvis/tools/makepdf.py`) writes a REAL PDF
+   via `fpdf2` (small, pure-Python, offline — added to requirements.txt). Text is
+   transliterated to ASCII (reusing read_document's transliterator) because fpdf's
+   core fonts are Latin-1; multi_cell uses `new_x=LMARGIN,new_y=NEXT` (without it
+   fpdf raises "Not enough horizontal space"). `write_file` now REFUSES a `.pdf`
+   path and steers to create_pdf; the agent system prompt routes "as a pdf" to
+   create_pdf. Verified end-to-end: agent -> create_pdf -> `%PDF-` file that pypdf
+   reads back. (Even when the model tries write_file first, the steer makes it
+   self-correct to create_pdf.) Wired via `from .tools import makepdf` in app.py.
+   Now 69 tools without browser. NOTE: still no .docx WRITER — a "as a word doc"
+   request would hit the same raw-text trap; add a create_docx later if asked.
+
+2. **"Can't talk aloud."** `jarvis/voice/tts.py` created a "fresh" pyttsx3 engine
+   per utterance, but `pyttsx3.init()` returns a CACHED singleton — proven: same
+   engine id every call, first utterance speaks (~3s), every later one returns
+   instantly (~0.1s) with NO sound. So Jarvis spoke once after launch then went
+   mute. Fix: speak through Windows SAPI directly with ONE persistent
+   `SAPI.SpVoice` (comtypes) on the tts thread (`comtypes.CoInitialize()` first,
+   `voice.Rate = 1`). Verified: 3/3 utterances speak, on a background daemon
+   thread, and via the real `Speaker` class. `pyttsx3` is now unused (left in
+   requirements.txt, harmless).
+
+Also fixed this session: `set_volume` for pycaw 20251023 (see the earlier commit).
+
 ## How to test (in order)
 
 ```

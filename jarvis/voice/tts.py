@@ -1,5 +1,12 @@
-"""Text-to-speech on a dedicated thread (pyttsx3/SAPI5 is not thread-safe,
-so all speaking goes through one queue + one engine)."""
+"""Text-to-speech on a dedicated thread.
+
+Speaks through Windows SAPI5 directly (``SAPI.SpVoice`` via comtypes). We used
+to create a fresh ``pyttsx3`` engine per utterance to dodge SAPI stalls, but
+``pyttsx3.init()`` actually returns a CACHED singleton engine that only speaks
+its FIRST utterance and then goes silent -- so Jarvis would say one thing after
+launch and never speak again. One persistent SpVoice on this thread speaks
+every time.
+"""
 
 import queue
 import threading
@@ -15,7 +22,12 @@ class Speaker(threading.Thread):
 
     def run(self):
         try:
-            import pyttsx3
+            import comtypes
+            comtypes.CoInitialize()  # SAPI is COM; this thread must init it
+            from comtypes.client import CreateObject
+
+            voice = CreateObject("SAPI.SpVoice")
+            voice.Rate = 1  # -10..10; slightly quicker than the default drawl
         except Exception:
             self.ok = False
             return
@@ -24,12 +36,8 @@ class Speaker(threading.Thread):
             if text is None:
                 break
             try:
-                engine = pyttsx3.init()  # fresh engine per utterance: avoids SAPI5 stalls
-                engine.setProperty("rate", 178)
                 self.speaking.set()
-                engine.say(text)
-                engine.runAndWait()
-                engine.stop()
+                voice.Speak(text)  # blocking: returns when the utterance ends
             except Exception:
                 self.ok = False
             finally:

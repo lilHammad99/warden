@@ -15,4 +15,5 @@ openwakeword
 ultralytics
 playwright
 pypdf
+fpdf2
 openpyxl
