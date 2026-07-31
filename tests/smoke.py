@@ -27,7 +27,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, numstats, organize, password, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textcodec, textextract, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, makedocx, makepdf, makexlsx, memory, numstats, organize, password, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textcodec, textextract, textstats, weather, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -4686,7 +4686,81 @@ def t_textcodec():
     check("textcodec hallucination guards", guards)
 
 
+def t_writers():
+    """create_pdf / create_docx / create_xlsx write REAL, openable files, and
+    write_file REFUSES those extensions and steers to them. Validates each file
+    by reading it back with its own library. Files land in a pid/uuid sandbox
+    under home, removed in finally. No model needed, so it lives in the safe set.
+    Closes the coverage gap that let broken/missing document writers ship."""
+    import os
+    import shutil
+    from pathlib import Path
+
+    from jarvis.config import HOME
+    from jarvis.tools import files, makedocx, makepdf, makexlsx, registry  # noqa: F401
+
+    sb = Path(HOME) / f"jarvis_writers_{os.getpid()}_{uuid.uuid4().hex}"
+    sb.mkdir(parents=True, exist_ok=True)
+    rel = sb.relative_to(Path(HOME))
+    try:
+        def pdf():
+            out = registry.dispatch("create_pdf", {
+                "path": str(rel / "cv.pdf"), "content": "John Smith\nEngineer",
+                "title": "CV"})
+            assert "Created" in out, out
+            f = sb / "cv.pdf"
+            assert f.read_bytes()[:5] == b"%PDF-", "not a real PDF"
+            import pypdf
+            assert len(pypdf.PdfReader(str(f)).pages) >= 1, "no pages"
+            return out
+        check("create_pdf makes a real, openable PDF", pdf)
+
+        def docx():
+            out = registry.dispatch("create_docx", {
+                "path": str(rel / "cv.docx"), "content": "John Smith\nEngineer"})
+            assert "Created" in out, out
+            from docx import Document
+            d = Document(str(sb / "cv.docx"))
+            assert any("John Smith" in p.text for p in d.paragraphs), "text missing"
+            return out
+        check("create_docx makes a real Word document", docx)
+
+        def xlsx():
+            out = registry.dispatch("create_xlsx", {
+                "path": str(rel / "b.xlsx"), "content": "Item,Amount\nRent,1200"})
+            assert "Created" in out, out
+            import openpyxl
+            ws = openpyxl.load_workbook(str(sb / "b.xlsx")).active
+            assert ws["A1"].value == "Item", "header wrong"
+            assert ws["B2"].value == 1200, "amount not stored as a number"
+            return out
+        check("create_xlsx makes a real workbook (numbers numeric)", xlsx)
+
+        def steer():
+            for ext, realtool in ((".pdf", "create_pdf"), (".docx", "create_docx"),
+                                  (".xlsx", "create_xlsx")):
+                out = registry.dispatch("write_file",
+                                        {"path": str(rel / ("x" + ext)), "content": "hi"})
+                assert realtool in out, out
+                assert not (sb / ("x" + ext)).exists(), f"write_file wrote a bad {ext}"
+            return "write_file refuses .pdf/.docx/.xlsx and steers to the writers"
+        check("write_file steers office formats to real writers", steer)
+
+        def guards():
+            # empty content refused, not a broken file
+            out = registry.dispatch("create_pdf", {"path": str(rel / "e.pdf"), "content": ""})
+            assert out.startswith("Error"), out
+            # outside home refused
+            out = registry.dispatch("create_xlsx", {"path": "C:/Windows/evil.xlsx", "content": "a,b"})
+            assert "own folders" in out or "isn't valid" in out, out
+            return "empty-content and containment guards hold"
+        check("writer hallucination guards", guards)
+    finally:
+        shutil.rmtree(sb, ignore_errors=True)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
+            "writers": t_writers,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
             "movefolder": t_movefolder, "copyfolder": t_copyfolder,
@@ -4723,6 +4797,7 @@ if __name__ == "__main__":
         t_numstats(); t_password(); t_textcodec()
         t_textextract()
         t_spreadsheet(); t_jsondata(); t_convertdata()
+        t_writers()
         t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()

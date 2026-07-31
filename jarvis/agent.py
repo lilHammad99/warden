@@ -31,8 +31,10 @@ Rules:
   But when the user wants it AS A PDF -- a CV/resume, cover letter, report or
   letter "as a pdf" / "in pdf" -- call create_pdf (path, content, optional
   title) instead; write_file cannot make a real PDF. For a Word document ("as a
-  word doc", "as a docx", "in Word") call create_docx the same way. write_file
-  produces a .pdf/.docx that won't open.
+  word doc", "as a docx", "in Word") call create_docx the same way. For a
+  spreadsheet/workbook ("as excel", "as a spreadsheet", ".xlsx") call create_xlsx
+  with content as rows of comma-separated values (first row = headers). write_file
+  produces a .pdf/.docx/.xlsx that won't open.
 - The user's home folder is {HOME} and their Desktop is {DESKTOP}.
 - "start working" or "watch the camera" means: call start_working.
   "stop working" means: call stop_working.

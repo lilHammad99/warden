@@ -19,6 +19,10 @@ def shutdown():
     _state["watchers"] = {}
 
 
+_NO_CAM = ("Error: I don't have a camera set up, sir -- none was found at "
+           "startup. Check the webcam, or add one in config.yaml under 'cameras'.")
+
+
 def _alert(text, frame):
     print(f"\njarvis> {text}")
     if _state["speaker"]:
@@ -38,6 +42,8 @@ def _alert(text, frame):
 )
 def start_working(camera: str | None = None) -> str:
     m = _state["manager"]
+    if m is None:
+        return _NO_CAM
     cam = m.resolve(camera)
     if cam in _state["watchers"] and _state["watchers"][cam].is_alive():
         return f"Watch mode is already running on {cam}."
@@ -62,6 +68,8 @@ def stop_working(camera: str | None = None) -> str:
     watchers = _state["watchers"]
     if not watchers:
         return "Watch mode was not running."
+    if _state["manager"] is None:
+        return _NO_CAM
     if camera:
         cam = _state["manager"].resolve(camera)
         w = watchers.pop(cam, None)
@@ -92,6 +100,8 @@ def stop_working(camera: str | None = None) -> str:
 def describe_view(camera: str | None = None, question: str | None = None) -> str:
     from ..vision.describe import describe_frame
 
+    if _state["manager"] is None:
+        return _NO_CAM
     frame = _state["manager"].grab_frame(camera)
     return describe_frame(frame, _state["cfg"]["models"]["vision"], question,
                           unload=_state["cfg"]["models"]["chat"])
@@ -103,6 +113,8 @@ def describe_view(camera: str | None = None, question: str | None = None) -> str
 )
 def list_cameras() -> str:
     m = _state["manager"]
+    if m is None:
+        return _NO_CAM
     lines = []
     for name in m.names():
         watching = name in _state["watchers"] and _state["watchers"][name].is_alive()

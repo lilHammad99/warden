@@ -1059,6 +1059,43 @@ you".
 reports the correct local city; create_docx/create_pdf produce openable files
 (pypdf / python-docx read them back). NOTE: no create_xlsx writer yet.
 
+## 2026-07-31 — create_xlsx + a real audit ("why is something always broken")
+
+the user asked for an Excel writer and, frustrated, "why is there always something
+missing or broken -- check all the skills and functions".
+
+- **create_xlsx** (`jarvis/tools/makexlsx.py`): the third writer (after
+  create_pdf/create_docx). Model passes `content` as CSV-ish rows (first row =
+  header); cells that look numeric are stored as NUMBERS so Excel can sum them,
+  header row bolded, sheet name from `title`. openpyxl (already a dep). write_file
+  now refuses .pdf/.docx/.xlsx (one table) and steers to the right writer; prompt
+  routes "as a spreadsheet/excel" here. Verified end-to-end.
+
+- **The audit + the real answer.** Ran the safe set AND a live-tool sweep
+  (`scratchpad/audit.py`): every live tool works -- get_time, system_info,
+  get_weather, web_search, fetch_page, take_screenshot, and the Playwright
+  browser (open/read/close) all OK. THE ROOT CAUSE of "always something broken":
+  **23 of 78 tools had NO automated test** (append_file, list_folder, open_app/
+  website, take_screenshot, the browser_*, the camera tools, set_volume,
+  lock_pc, web_search/fetch_page, and -- until now -- the new writers/weather).
+  Logic-only smoke tests also gave false confidence (tts asserted `ok=True`, not
+  that sound played; set_volume had no test at all). So breakage only surfaced
+  when the user hit it. Actions taken this pass:
+  - Added `t_writers` smoke section (create_pdf/docx/xlsx make REAL files,
+    validated by reading them back; write_file steer; guards) to the SAFE set,
+    and added makepdf/makedocx/makexlsx/weather to the imports test.
+  - Fixed a real bug the audit found: the camera tools (`list_cameras`,
+    `describe_view`, `start_working`, `stop_working`) crashed with a raw
+    `'NoneType' has no attribute` when the camera manager wasn't initialised
+    (no webcam / init failed); they now return a friendly `_NO_CAM` message.
+  - Full safe set PASS incl. the 5 new writer checks; camera/vision/tts smokes
+    PASS after the guard changes.
+  Remaining untested (work, but no automated guard yet): append_file, list_folder,
+  open_app/open_website/open_folder, take_screenshot, lock_pc, set_volume,
+  web_search/fetch_page, browser_*, get_weather, the camera tools. Next hardening
+  pass should add a network section (weather/web_search/fetch_page) and a
+  system/hardware section.
+
 ## How to test (in order)
 
 ```
