@@ -945,6 +945,57 @@ on whether the OPTIONAL `browser` module imports at count time (it adds 6):
 after Phase 43 that is 68 without browser, 74 with (encode_text added one).
 No tools are being silently dropped.
 
+## 2026-07-31 — Fix: loops after every question + apparent loss of voice/vision
+
+the user reported Jarvis getting "stuck in a loop after every minor question" and
+"losing the ability to talk and to see". Diagnosed and fixed; NO model swap was
+needed (tested and rejected — see below).
+
+Root causes (evidence-based, reproduced):
+1. **The loop.** For a simple question (e.g. "what time is it"), qwen3:8b picks
+   the WRONG tool (`run_command "time"`), which errors, and then repeats the
+   identical failing call until `MAX_TOOL_ROUNDS` is exhausted -> "I got stuck in
+   a tool loop". The deeper cause: **68-74 tools + a 14 KB system prompt overwhelm
+   a small local model's tool selection.** Proof: the SAME qwen3:8b shown only
+   ~19 tools answered time/math/convert/dates/word-count all correctly in 2-7 s.
+2. **"Lost voice and vision" was NOT broken code.** There were TWO `python -m
+   jarvis` instances running at once, contending for the single mic, webcam and
+   Ollama model; the loser can't hear/see/speak, and a looping brain never
+   produces a spoken reply. With the duplicate killed, tts / camera / vision
+   smoke tests all PASS unchanged.
+
+Fixes:
+- `jarvis/agent.py` — loop guard + graceful finish. Track (tool+args) per turn:
+  an identical repeat is not re-run, it gets a firm "you already called this,
+  change course or answer" push-back. Cap any single tool to `MAX_SAME_TOOL` (3)
+  calls per turn (catches thrash with varied args). If rounds still run out,
+  `_final_answer()` makes ONE no-tools call so Jarvis says something useful
+  instead of the dead-end "stuck in a tool loop" message. `_call_model` now takes
+  an explicit `tools=` list.
+- `jarvis/tools/registry.py` — **per-turn tool router** (`specs_for(text)`).
+  Keeps ALL tools registered/dispatchable but only OFFERS the model a relevant
+  subset: an always-on `_CORE` (~20 everyday/vague-trigger tools) plus the
+  non-core tools whose name/description keywords the question mentions, ranked by
+  overlap, capped at `limit` (24). `dispatch()` is unchanged and still runs any
+  registered tool, so a tool left out of an offer is never lost — the model can
+  still reach it via `list_tools`. `agent.chat()` calls `specs_for(user_text)`.
+- Config unchanged: still `qwen3:8b`. Verified end-to-end in the real app
+  (`-m jarvis`, piped): time/percent/convert all correct, 2-5 s, no loops.
+
+Model bake-off (why we did NOT "upgrade"): tested qwen2.5:7b-instruct (slower,
+thrashes worse), qwen2.5:14b-instruct (~109 s/answer, RAM/VRAM-bound, still
+wrong), llama3.1:8b (fabricates tool-call JSON as text), and qwen3:8b think=True
+(slower, avoids tools). All WORSE than qwen3:8b+routing on the dev machine.
+The bottleneck was tool count, not model IQ. The extra pulled models
+(qwen2.5:7b-instruct, qwen2.5:14b-instruct, llama3.1:8b) are still in `ollama`
+and can be removed with `ollama rm` if disk is needed.
+
+Pre-existing, still open (NOT caused by this change, out of scope here):
+`set_volume` hits a pycaw `'AudioDevice' has no attribute 'Activate'` error;
+`get_time` is sometimes picked over `today` (both correct); the clipboard smoke
+checks fail transiently when another app holds the Windows clipboard ("clipboard
+is busy").
+
 ## How to test (in order)
 
 ```

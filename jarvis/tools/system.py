@@ -53,12 +53,13 @@ def take_screenshot() -> str:
 
 
 def _volume_endpoint():
-    from comtypes import CLSCTX_ALL
-    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+    import comtypes
+    from pycaw.pycaw import AudioUtilities
 
-    devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    return interface.QueryInterface(IAudioEndpointVolume)
+    comtypes.CoInitialize()  # set_volume runs on the agent thread, not main
+    # pycaw's GetSpeakers() returns an AudioDevice whose EndpointVolume property
+    # is the IAudioEndpointVolume interface (the old .Activate() call is gone).
+    return AudioUtilities.GetSpeakers().EndpointVolume
 
 
 @tool(

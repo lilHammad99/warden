@@ -22,9 +22,48 @@ Nothing here can crash the agent: every path returns a plain string.
 import difflib
 import inspect
 import json
+import re
 import traceback
 
 _TOOLS: dict[str, dict] = {}
+
+# Tools always offered to the model, regardless of the question: the everyday
+# ones and those whose trigger words are too vague to keyword-match reliably.
+# Everything else is added per-turn by specs_for() when the question mentions
+# it. dispatch() still runs ANY registered tool, so a tool left out of the
+# offer is never truly lost -- the model can find it via list_tools.
+_CORE = {
+    "today", "calculate", "convert_units", "count_words",
+    "write_file", "read_file", "find_files", "search_files",
+    "open_app", "open_website", "web_search",
+    "run_command", "remember", "recall", "add_task", "list_tasks",
+    "describe_view", "start_working", "stop_working", "list_tools",
+}
+
+# words too common to signal a specific tool
+_STOP = {
+    "the", "and", "for", "you", "your", "what", "whats", "how", "many", "much",
+    "can", "would", "could", "should", "please", "with", "this", "that", "these",
+    "those", "from", "into", "out", "get", "got", "have", "has", "was", "are",
+    "was", "were", "will", "them", "they", "any", "all", "some", "one", "two",
+    "sir", "jarvis", "tell", "give", "show", "make", "want", "need", "about",
+    "here", "there", "then", "now", "just", "like", "does", "did", "not",
+}
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) > 2 and w not in _STOP}
+
+
+def _terms(entry: dict) -> set[str]:
+    """Keyword set for a tool (its name + description), computed once."""
+    terms = entry.get("_terms")
+    if terms is None:
+        f = entry["spec"]["function"]
+        terms = _words(f["name"].replace("_", " ") + " " + f["description"])
+        entry["_terms"] = terms
+    return terms
 
 
 def tool(name: str, description: str, parameters: dict | None = None):
@@ -48,6 +87,29 @@ def tool(name: str, description: str, parameters: dict | None = None):
 
 def specs() -> list[dict]:
     return [t["spec"] for t in _TOOLS.values()]
+
+
+def specs_for(text: str, limit: int = 24) -> list[dict]:
+    """The subset of tools to offer the model for THIS question.
+
+    A small local model chooses badly when shown all ~70 tools at once, so we
+    always offer the core set plus the non-core tools whose keywords the
+    question actually mentions, ranked by overlap, up to `limit` total. Ties
+    break alphabetically for a stable offer. dispatch() is unaffected -- it
+    still runs any registered tool the model names."""
+    core = [(n, t["spec"]) for n, t in _TOOLS.items() if n in _CORE]
+    user_kw = _words(text)
+    scored = []
+    for n, t in _TOOLS.items():
+        if n in _CORE:
+            continue
+        score = len(user_kw & _terms(t))
+        if score:
+            scored.append((-score, n, t["spec"]))
+    scored.sort()  # highest score first, then name
+    room = max(0, limit - len(core))
+    extra = [spec for _, _, spec in scored[:room]]
+    return [spec for _, spec in core] + extra
 
 
 def names() -> list[str]:

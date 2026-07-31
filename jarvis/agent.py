@@ -210,6 +210,7 @@ Rules:
 """
 
 MAX_TOOL_ROUNDS = 8
+MAX_SAME_TOOL = 3  # a small model can thrash one tool; cap it per turn
 
 
 class Agent:
@@ -219,12 +220,12 @@ class Agent:
         self.lock = threading.Lock()  # console + voice threads share one brain
         self.last_tools: list[str] = []  # tools used in the most recent chat()
 
-    def _call_model(self, messages):
+    def _call_model(self, messages, tools=None):
         try:
             return ollama.chat(
                 model=self.model,
                 messages=messages,
-                tools=registry.specs(),
+                tools=tools,
                 think=False,
                 options={"num_ctx": 8192},
             )
@@ -232,7 +233,7 @@ class Agent:
             return ollama.chat(
                 model=self.model,
                 messages=messages,
-                tools=registry.specs(),
+                tools=tools,
                 options={"num_ctx": 8192},
             )
 
@@ -258,8 +259,13 @@ class Agent:
             self.last_tools = []
             self._refresh_memory()
             self.messages.append({"role": "user", "content": user_text})
+            # offer only the tools relevant to THIS question: a small local model
+            # picks the right tool far more reliably from a short, relevant list
+            turn_tools = registry.specs_for(user_text)
+            seen: dict[str, str] = {}  # (tool + args) -> result, to catch repeats
+            name_counts: dict[str, int] = {}  # per-tool call count this turn
             for _ in range(MAX_TOOL_ROUNDS):
-                response = self._call_model(self.messages)
+                response = self._call_model(self.messages, tools=turn_tools)
                 msg = response["message"]
                 tool_calls = msg.get("tool_calls")
                 if not tool_calls:
@@ -283,12 +289,48 @@ class Agent:
                     status(f"...using {name.replace('_', ' ')}")
                     if isinstance(name, str) and name in registry._TOOLS:
                         self.last_tools.append(name)
-                    result = registry.dispatch(name, args)
+                    name_counts[name] = name_counts.get(name, 0) + 1
+                    sig = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+                    if name_counts[name] > MAX_SAME_TOOL:
+                        # a small model can thrash one tool with varied args;
+                        # cut it off and make it answer with what it has
+                        result = (
+                            f"You have called {name} {name_counts[name] - 1} "
+                            "times this turn. Stop calling it and answer the "
+                            "user directly now with what you already have."
+                        )
+                    elif sig in seen:
+                        # the model is repeating an identical call; don't run it
+                        # again — push back so it changes course or just answers
+                        result = (
+                            f"You already called {name} with these exact "
+                            f"arguments and it returned: {seen[sig]} Do not call "
+                            "it again the same way. Use a different tool or "
+                            "answer the user directly."
+                        )
+                    else:
+                        result = registry.dispatch(name, args)
+                        seen[sig] = result
                     self.messages.append(
                         {"role": "tool", "content": result, "tool_name": name}
                     )
-            self._trim_history()
-            return "I got stuck in a tool loop, sir. Please try rephrasing."
+            # Out of tool rounds: force a plain answer instead of giving up, so a
+            # tool-happy model still says something useful.
+            return self._final_answer()
+
+    def _final_answer(self) -> str:
+        self.messages.append(
+            {"role": "user", "content": "Answer my last question now in one or "
+             "two short sentences, without using any tools."}
+        )
+        try:
+            response = self._call_model(self.messages)  # no tools: force a reply
+            content = (response["message"].get("content") or "").strip()
+        except Exception:
+            content = ""
+        self.messages.append({"role": "assistant", "content": content})
+        self._trim_history()
+        return content or "Sorry, sir — I couldn't complete that. Please try rephrasing."
 
     def _trim_history(self, keep: int = 40):
         if len(self.messages) > keep:
