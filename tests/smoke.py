@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
-dates, convert, textstats, numstats, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+dates, convert, textstats, numstats, password, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
 """
@@ -27,7 +27,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, numstats, organize, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textextract, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, numstats, organize, password, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textextract, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -4465,6 +4465,132 @@ def t_numstats():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def t_password():
+    """Exercises generate_password + its defenses against 8B hallucinations.
+    Passwords are random, so the checks assert INVARIANTS (length, allowed
+    characters, class guarantees) across several draws rather than exact
+    output. The tool touches no filesystem, so there is nothing to collide on
+    and no sandbox is needed; it needs no model and lives in the safe set."""
+    from jarvis.tools import password as pw  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    def _extract(out):
+        """Pull the generated password(s) out of the friendly reply. Each
+        password sits alone on its own line, so parsing is unambiguous."""
+        lines = out.splitlines()
+        pws = []
+        for line in lines:
+            s = line.strip()
+            # numbered lines "N. <pw>" for count>1 (N may be multi-digit; a
+            # password never contains ". " since the charset has no space)
+            head, sep, rest = s.partition(". ")
+            if sep and head.isdigit() and rest:
+                pws.append(rest)
+        if pws:
+            return pws
+        # single: the line immediately after the "...sir:" header line
+        for i, line in enumerate(lines):
+            if line.rstrip().endswith("sir:"):
+                return [lines[i + 1].strip()]
+        raise AssertionError(out)
+
+    def happy_path():
+        for _ in range(30):
+            out = registry.dispatch("generate_password", {})
+            out.encode("ascii")  # pure ASCII by construction
+            p = _extract(out)[0]
+            assert len(p) == 16, (len(p), out)     # default length
+            # default: all four classes present (avoid_ambiguous on)
+            assert any(c.islower() for c in p), p
+            assert any(c.isupper() for c in p), p
+            assert any(c.isdigit() for c in p), p
+            assert any(c in "!@#$%^&*()-_=+[]{};:,.?" for c in p), p
+            # no ambiguous look-alikes by default
+            assert not (set(p) & set("O0oIl1")), p
+        return "16-char, all classes, no look-alikes"
+    check("password happy path", happy_path)
+
+    def custom_length_and_classes():
+        out = registry.dispatch("generate_password", {"length": 32})
+        assert len(_extract(out)[0]) == 32, out
+        # digits only
+        for _ in range(20):
+            p = _extract(registry.dispatch("generate_password",
+                {"length": 20, "symbols": False, "uppercase": False,
+                 "lowercase": False, "digits": True}))[0]
+            assert len(p) == 20 and p.isdigit(), p
+        # no symbols -> letters/digits only
+        for _ in range(20):
+            p = _extract(registry.dispatch("generate_password",
+                {"symbols": False}))[0]
+            assert all(c.isalnum() for c in p), p
+        # allow ambiguous look-alikes when asked off
+        seen = set()
+        for _ in range(60):
+            seen |= set(_extract(registry.dispatch("generate_password",
+                {"avoid_ambiguous": False, "length": 40}))[0])
+        assert seen & set("O0oIl1"), "ambiguous chars never appeared"
+        return "length + class selection honoured"
+    check("password custom length/classes", custom_length_and_classes)
+
+    def multiple():
+        out = registry.dispatch("generate_password", {"count": 5, "length": 12})
+        pws = _extract(out)
+        assert len(pws) == 5, out
+        assert all(len(p) == 12 for p in pws), out
+        assert len(set(pws)) == 5, "passwords should differ"  # ~0 collision odds
+        return "count makes N distinct passwords"
+    check("password multiple", multiple)
+
+    def bounds_and_fallback():
+        # too-short / too-long lengths are clamped, not honoured or crashed
+        assert len(_extract(registry.dispatch(
+            "generate_password", {"length": 1}))[0]) == pw.MIN_LEN
+        assert len(_extract(registry.dispatch(
+            "generate_password", {"length": 10 ** 9}))[0]) == pw.MAX_LEN
+        # count is clamped to MAX_COUNT
+        assert len(_extract(registry.dispatch(
+            "generate_password", {"count": 9999, "length": 8}))) == pw.MAX_COUNT
+        # every class off -> a strong default set is used, not an error/hang
+        out = registry.dispatch("generate_password",
+            {"symbols": False, "digits": False,
+             "uppercase": False, "lowercase": False})
+        assert "default set" in out, out
+        assert len(_extract(out)[0]) == 16, out
+        return "length/count clamped, all-off falls back"
+    check("password bounds + fallback", bounds_and_fallback)
+
+    def hallucination_guards():
+        # wrong types must be coerced, never raise
+        variants = [
+            {"length": "20 characters"},   # numeric string with trailing words
+            {"length": 12.0},              # float
+            {"length": None},              # None -> default
+            {"symbols": "no", "digits": "yes"},  # string booleans
+            {"symbols": "off", "uppercase": "on"},
+            {"count": "3"},                # numeric string count
+            {"length": True},              # bool where int expected -> default
+            {"length": ["nonsense"]},      # wrong shape -> default
+        ]
+        for v in variants:
+            out = registry.dispatch("generate_password", v)
+            assert isinstance(out, str) and "sir" in out, (v, out)
+            out.encode("ascii")
+        # "20 characters" should coerce to length 20
+        assert len(_extract(registry.dispatch(
+            "generate_password", {"length": "20 characters"}))[0]) == 20
+        # string booleans honoured: symbols off -> alnum only
+        p = _extract(registry.dispatch(
+            "generate_password", {"symbols": "no", "length": 24}))[0]
+        assert all(c.isalnum() for c in p), p
+        # a stray extra arg is dropped by dispatch; the call still succeeds
+        out = registry.dispatch("generate_password",
+            {"length": 10, "reason": "curious"})
+        assert len(_extract(out)[0]) == 10, out
+        return "wrong-type/alt args coerced, never raised"
+    check("password hallucination guards", hallucination_guards)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
@@ -4477,7 +4603,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert, "textstats": t_textstats,
-            "numstats": t_numstats,
+            "numstats": t_numstats, "password": t_password,
             "textextract": t_textextract,
             "spreadsheet": t_spreadsheet, "jsondata": t_jsondata,
             "convertdata": t_convertdata,
@@ -4498,7 +4624,7 @@ if __name__ == "__main__":
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()
-        t_numstats()
+        t_numstats(); t_password()
         t_textextract()
         t_spreadsheet(); t_jsondata(); t_convertdata()
         t_reminders(); t_dispatch()

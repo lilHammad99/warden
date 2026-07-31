@@ -1278,6 +1278,44 @@
       `tempfile.mkdtemp` for the stores) so two overlapping loop-cycle smoke runs
       no longer collide and cause transient false failures. Assertions unchanged
 
+### Phase 42 — Generate a strong password (2026-07-31)
+- [x] `generate_password` tool (`jarvis/tools/password.py`): a productivity /
+      safe-automation win that is squarely on-brand for a "local - private -
+      yours" assistant. Instead of the user visiting some website that SEES (and
+      may log) the password it hands back, Jarvis mints a strong random password
+      right here on the machine and it never leaves and is never stored ("generate
+      a password", "make me a 20 character password", "a password with no
+      symbols", "create 5 passwords"). Then "copy that" (`set_clipboard`) puts it
+      on the clipboard to paste anywhere
+- [x] Pure standard library (`secrets`, the cryptographically-strong RNG the
+      stdlib provides for exactly this), NO new dependency. Options: `length`
+      (default 16), whether to include `symbols`/`digits`/`uppercase`/`lowercase`,
+      `avoid_ambiguous` look-alikes (0/O, 1/l/I; on by default so it reads back
+      cleanly), and `count` (how many). When it fits, the password is guaranteed
+      to contain at least one character from every enabled class, then securely
+      shuffled (Fisher-Yates via `secrets`)
+- [x] Bounded: `length` coerced + clamped to `MIN_LEN`..`MAX_LEN` (4..128) so a
+      hallucinated `length=1e9` can't hang or exhaust memory; `count` clamped to
+      `MAX_COUNT` (20). Pure ASCII by construction (every character comes from an
+      ASCII pool), so it can never corrupt the console/context
+- [x] Never fails, never persists: if the model turns EVERY class off, a strong
+      default set is used (with a note) rather than erroring or looping; wrong-type
+      / empty / missing args are coerced or defaulted (`_as_int` pulls the number
+      out of "20 characters", `_as_bool` accepts yes/no/on/off/1/0); alt count
+      names (`n`/`number`/`amount`/`quantity`) accepted. Never raises; the
+      password is returned and immediately forgotten
+- [x] Auto-registers via a new `password` import in `app.py`; the agent system
+      prompt steers "generate/make a password" to `generate_password` (mint it
+      locally, offer to copy it, never invent one or read it aloud); the console
+      "Try:" line suggests "generate a strong password"
+- [x] `tests/smoke.py password` (in the safe set) covers the happy path (16 chars,
+      all four classes present, no look-alikes -- over 30 draws), custom length +
+      per-class selection (digits-only, no-symbols, ambiguous-allowed), `count`
+      making N distinct passwords, the length/count clamps, the all-classes-off
+      fallback, and the wrong-type/alt-name/extra-arg hallucination guards. The
+      tool touches no filesystem, so there is nothing to collide on (no sandbox
+      needed). Full safe set: 331 checks, all PASS. No new dependency
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1400,6 +1438,12 @@
       (`summarize_numbers`); pure stdlib (no dep), works on direct numbers or a
       file/CSV column, home-contained, bounded (text/file size, 100000 values),
       understands thousands separators + scientific notation, ASCII-only
+- [x] Productivity / safe automation: generate a strong password locally -- done
+      in Phase 42 (`generate_password`); pure stdlib (`secrets`, no dep), fully
+      local (never leaves the PC, never stored), configurable length/character
+      classes/count with avoid-ambiguous look-alikes, guarantees one of each
+      enabled class, bounded (length 4-128, count <=20), all-classes-off falls
+      back to a strong default, ASCII-only; pairs with set_clipboard ("copy that")
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

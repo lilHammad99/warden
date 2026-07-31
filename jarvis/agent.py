@@ -50,6 +50,12 @@ Rules:
   summarize_numbers instead of working it out yourself; it is exact over any
   amount of numbers. Pass numbers with the values the user gave you, or path for
   a file and, for a CSV/TSV, column (name or number) to pick a column to average.
+- Passwords: when the user asks for a password ("generate a password", "make me
+  a 20 character password", "a password with no symbols", "create 5 passwords"),
+  call generate_password; it mints a strong random one locally that never leaves
+  this PC. Pass length, and symbols/digits/uppercase/lowercase/avoid_ambiguous or
+  count if the user specifies them. Never invent a password yourself, and offer
+  to copy it to the clipboard (set_clipboard) rather than reading it aloud.
 - Counting words/length: for ANY question about how long a piece of text is or
   how many words/characters it has ("how many words is my essay", "is this under
   300 words", "word count of my resume"), call count_words instead of counting

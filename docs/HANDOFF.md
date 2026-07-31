@@ -870,12 +870,44 @@ figures"). Pairs with read_csv (average a column). NO new dependency (pure stdli
   guards, ASCII-only, and the empty/missing/wrong-type guards. Full safe set:
   326 checks, all PASS. No new dependency.
 
+## 2026-07-31 — Generate a strong password (Phase 42)
+
+Added `generate_password` (`jarvis/tools/password.py`): a productivity /
+safe-automation win that is on-brand for a "local - private - yours" assistant.
+Rather than the user visiting a website that SEES (and may log) the password it
+returns, Jarvis mints a strong random one right here -- it never leaves the PC and
+is never stored ("generate a password", "make me a 20 character password", "a
+password with no symbols", "create 5 passwords"). Then "copy that" (set_clipboard)
+puts it on the clipboard. NO new dependency (pure stdlib `secrets`).
+- Options: `length` (default 16), include `symbols`/`digits`/`uppercase`/
+  `lowercase`, `avoid_ambiguous` look-alikes (0/O, 1/l/I; default on), `count`.
+  Uses `secrets` (cryptographically strong); when it fits, guarantees one char
+  from every enabled class then securely shuffles (Fisher-Yates via `secrets`).
+- Bounded: `length` coerced + clamped 4..128 (`MIN_LEN`..`MAX_LEN`) so a
+  hallucinated `length=1e9` can't hang; `count` clamped to `MAX_COUNT` (20). Pure
+  ASCII by construction. Never persists, never raises: all classes off -> a strong
+  default set (with a note), not an error/loop; wrong-type/empty/missing args
+  coerced (`_as_int` reads "20 characters", `_as_bool` reads yes/no/on/off/1/0);
+  alt count names (`n`/`number`/`amount`/`quantity`). Password returned then
+  forgotten.
+- Wired into `app.py` imports (`from .tools import password`) + the console "Try:"
+  line ("generate a strong password"), and the agent system prompt (mint locally,
+  offer to copy, never invent one or read it aloud), after the summarize_numbers
+  bullet.
+- `tests/smoke.py password` (safe set; no filesystem, so no sandbox needed): the
+  happy path (16 chars, all four classes, no look-alikes, over 30 draws), custom
+  length + per-class selection (digits-only / no-symbols / ambiguous-allowed),
+  `count` making N distinct passwords, the length/count clamps, the all-off
+  fallback, and the wrong-type/alt-name/extra-arg guards. Checks assert INVARIANTS
+  (random output) not fixed strings. Full safe set: 331 checks, all PASS. No new
+  dependency.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 41 that is 66 without browser, 72 with (summarize_numbers added one).
+after Phase 42 that is 67 without browser, 73 with (generate_password added one).
 No tools are being silently dropped.
 
 ## How to test (in order)
