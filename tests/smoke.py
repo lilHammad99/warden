@@ -7,6 +7,7 @@ e2e, all
 """
 
 import sys
+import uuid
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
@@ -40,9 +41,15 @@ def t_tools():
     check("get_time", lambda: registry.dispatch("get_time", {}))
     check("system_info", lambda: registry.dispatch("system_info", {}))
     import tempfile, os
-    tmp = os.path.join(tempfile.gettempdir(), "jarvis_smoke.txt")
+    # pid/uuid-tagged so overlapping smoke runs never collide on the temp file
+    tmp = os.path.join(tempfile.gettempdir(),
+                       "jarvis_smoke_%d_%s.txt" % (os.getpid(), uuid.uuid4().hex))
     check("write_file", lambda: registry.dispatch("write_file", {"path": tmp, "content": "hello"}))
     check("read_file", lambda: registry.dispatch("read_file", {"path": tmp}))
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
 
 
 def t_memory():
@@ -52,11 +59,11 @@ def t_memory():
     from jarvis.tools import registry
 
     # isolate: use a temp store so we never touch the user's real memory
-    import tempfile, os, pathlib
-    mem._STORE = pathlib.Path(tempfile.gettempdir()) / "jarvis_mem_smoke.json"
-    for p in (mem._STORE, mem._STORE.with_name("memory.corrupt.json")):
-        if p.exists():
-            os.remove(p)
+    import tempfile, os, pathlib, shutil
+    # unique per-run store DIR so overlapping smoke runs never collide -- the
+    # fixed-name corrupt sidecar (memory.corrupt.json) lands in this dir too
+    _memdir = tempfile.mkdtemp(prefix="jarvis_mem_smoke_%d_" % os.getpid())
+    mem._STORE = pathlib.Path(_memdir) / "memory.json"
 
     def happy_path():
         assert "Remembered" in registry.dispatch("remember", {"fact": "The user's name is the user"})
@@ -146,6 +153,9 @@ def t_memory():
         return "ambiguous-safety + guards + dedup-on-update ok"
     check("memory update_fact guards", update_guards)
 
+    # check() swallows assertion errors, so control always reaches here
+    shutil.rmtree(_memdir, ignore_errors=True)
+
 
 def t_shell():
     """Exercises the safe run_command tool + its defenses. No model needed."""
@@ -204,7 +214,8 @@ def t_find():
 
     # build an isolated sandbox INSIDE the home folder (find only searches home)
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_find_smoke"
+    _sb = "jarvis_find_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     (sandbox / "sub").mkdir(parents=True, exist_ok=True)
     (sandbox / "budget_2026.xlsx").write_text("x", encoding="utf-8")
     (sandbox / "sub" / "my_cv.pdf").write_text("x", encoding="utf-8")
@@ -214,23 +225,23 @@ def t_find():
 
     try:
         def happy_path():
-            out = registry.dispatch("find_files", {"name": "budget", "folder": "jarvis_find_smoke"})
+            out = registry.dispatch("find_files", {"name": "budget", "folder": f"{_sb}"})
             assert "budget_2026.xlsx" in out, out
             # nested file found via recursion
-            deep = registry.dispatch("find_files", {"name": "cv", "folder": "jarvis_find_smoke"})
+            deep = registry.dispatch("find_files", {"name": "cv", "folder": f"{_sb}"})
             assert "my_cv.pdf" in deep, deep
             return "found top-level + nested files"
         check("find happy path", happy_path)
 
         def wildcard():
-            out = registry.dispatch("find_files", {"name": "*.xlsx", "folder": "jarvis_find_smoke"})
+            out = registry.dispatch("find_files", {"name": "*.xlsx", "folder": f"{_sb}"})
             assert "budget_2026.xlsx" in out, out
             return "wildcard match ok"
         check("find wildcard", wildcard)
 
         def prunes_noise_dirs():
             # node_modules is pruned, so its budget_junk.xlsx must not appear
-            out = registry.dispatch("find_files", {"name": "budget", "folder": "jarvis_find_smoke"})
+            out = registry.dispatch("find_files", {"name": "budget", "folder": f"{_sb}"})
             assert "budget_junk.xlsx" not in out, f"node_modules not pruned: {out}"
             return "noise dirs pruned"
         check("find prunes noise dirs", prunes_noise_dirs)
@@ -247,14 +258,14 @@ def t_find():
             assert "Error" in registry.dispatch("find_files", {})           # missing arg
             assert "too broad" in registry.dispatch("find_files", {"name": "*"})
             # wrong types / missing folder must not raise
-            registry.dispatch("find_files", {"name": 123, "folder": "jarvis_find_smoke"})
-            miss = registry.dispatch("find_files", {"name": "x", "folder": "jarvis_find_smoke/nope"})
+            registry.dispatch("find_files", {"name": 123, "folder": f"{_sb}"})
+            miss = registry.dispatch("find_files", {"name": "x", "folder": f"{_sb}/nope"})
             assert "does not exist" in miss, miss
             return "guards held"
         check("find hallucination guards", hallucination_guards)
 
         def no_match_is_friendly():
-            out = registry.dispatch("find_files", {"name": "zzzznotathing", "folder": "jarvis_find_smoke"})
+            out = registry.dispatch("find_files", {"name": "zzzznotathing", "folder": f"{_sb}"})
             assert "No files matching" in out, out
             return "no-match message ok"
         check("find no-match message", no_match_is_friendly)
@@ -273,7 +284,8 @@ def t_search():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_search_smoke"
+    _sb = "jarvis_search_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     (sandbox / "sub").mkdir(parents=True, exist_ok=True)
     (sandbox / "notes.txt").write_text(
         "shopping list\nthe wifi password is hunter2\nremember the milk\n",
@@ -294,7 +306,7 @@ def t_search():
     try:
         def happy_path():
             out = registry.dispatch(
-                "search_files", {"query": "wifi password", "folder": "jarvis_search_smoke"})
+                "search_files", {"query": "wifi password", "folder": f"{_sb}"})
             assert "notes.txt" in out, out
             assert "hunter2" in out, out          # the matched line is shown
             assert "2:" in out                    # with its line number
@@ -304,7 +316,7 @@ def t_search():
         def case_insensitive_and_nested():
             # lower-case query matches upper-case text in a nested file
             out = registry.dispatch(
-                "search_files", {"query": "budget", "folder": "jarvis_search_smoke"})
+                "search_files", {"query": "budget", "folder": f"{_sb}"})
             assert "diary.md" in out, out
             return "case-insensitive + nested ok"
         check("search case-insensitive nested", case_insensitive_and_nested)
@@ -313,14 +325,14 @@ def t_search():
             # limiting to *.md must exclude notes.txt / accents.txt
             out = registry.dispatch(
                 "search_files",
-                {"query": "budget", "folder": "jarvis_search_smoke", "name": "*.md"})
+                {"query": "budget", "folder": f"{_sb}", "name": "*.md"})
             assert "diary.md" in out and "accents.txt" not in out, out
             return "name pattern filter ok"
         check("search name filter", name_filter)
 
         def prunes_and_skips_binary():
             out = registry.dispatch(
-                "search_files", {"query": "wifi password", "folder": "jarvis_search_smoke"})
+                "search_files", {"query": "wifi password", "folder": f"{_sb}"})
             # node_modules pruned -> its junk.txt hit must not appear
             assert "junk.txt" not in out, f"node_modules not pruned: {out}"
             # binary file skipped -> blob.bin must not appear
@@ -330,7 +342,7 @@ def t_search():
 
         def output_is_ascii():
             out = registry.dispatch(
-                "search_files", {"query": "budget", "folder": "jarvis_search_smoke"})
+                "search_files", {"query": "budget", "folder": f"{_sb}"})
             out.encode("ascii")  # raises if any non-ASCII leaked through
             return "output stayed pure ASCII"
         check("search ascii-only output", output_is_ascii)
@@ -347,22 +359,22 @@ def t_search():
             assert "Error" in registry.dispatch("search_files", {"query": ""})
             assert "Error" in registry.dispatch("search_files", {})   # missing arg
             # wrong types must not raise
-            registry.dispatch("search_files", {"query": 123, "folder": "jarvis_search_smoke"})
-            registry.dispatch("search_files", {"query": "x", "folder": "jarvis_search_smoke", "name": 5})
+            registry.dispatch("search_files", {"query": 123, "folder": f"{_sb}"})
+            registry.dispatch("search_files", {"query": "x", "folder": f"{_sb}", "name": 5})
             # bare '*' name filter is treated as no filter, not a crash
             registry.dispatch(
                 "search_files",
-                {"query": "wifi", "folder": "jarvis_search_smoke", "name": "*"})
+                {"query": "wifi", "folder": f"{_sb}", "name": "*"})
             # missing folder is a friendly message, not a crash
             miss = registry.dispatch(
-                "search_files", {"query": "x", "folder": "jarvis_search_smoke/nope"})
+                "search_files", {"query": "x", "folder": f"{_sb}/nope"})
             assert "does not exist" in miss, miss
             return "guards held"
         check("search hallucination guards", hallucination_guards)
 
         def no_match_is_friendly():
             out = registry.dispatch(
-                "search_files", {"query": "zzzznotathing", "folder": "jarvis_search_smoke"})
+                "search_files", {"query": "zzzznotathing", "folder": f"{_sb}"})
             assert "No files containing" in out, out
             return "no-match message ok"
         check("search no-match message", no_match_is_friendly)
@@ -383,7 +395,8 @@ def t_recent():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_recent_smoke"
+    _sb = "jarvis_recent_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     (sandbox / "sub").mkdir(parents=True, exist_ok=True)
     now = time.time()
 
@@ -408,7 +421,7 @@ def t_recent():
 
     try:
         def happy_path_and_order():
-            out = registry.dispatch("recent_files", {"folder": "jarvis_recent_smoke"})
+            out = registry.dispatch("recent_files", {"folder": f"{_sb}"})
             # recent files inside the 7-day default show; the 400-day one doesn't
             assert "fresh_today.txt" in out, out
             assert "report.docx" in out and "notes.md" in out, out
@@ -421,7 +434,7 @@ def t_recent():
         def days_window():
             # a 1-day window drops the 2- and 5-day-old files
             out = registry.dispatch("recent_files",
-                                    {"folder": "jarvis_recent_smoke", "days": 1})
+                                    {"folder": f"{_sb}", "days": 1})
             assert "fresh_today.txt" in out, out
             assert "report.docx" not in out and "notes.md" not in out, out
             return "days window narrows results"
@@ -430,21 +443,21 @@ def t_recent():
         def name_filter():
             out = registry.dispatch(
                 "recent_files",
-                {"folder": "jarvis_recent_smoke", "name": "*.md"})
+                {"folder": f"{_sb}", "name": "*.md"})
             assert "notes.md" in out, out
             assert "report.docx" not in out and "fresh_today.txt" not in out, out
             return "name pattern filter ok"
         check("recent name filter", name_filter)
 
         def prunes_noise_dirs():
-            out = registry.dispatch("recent_files", {"folder": "jarvis_recent_smoke"})
+            out = registry.dispatch("recent_files", {"folder": f"{_sb}"})
             assert "build.log" not in out, f"node_modules not pruned: {out}"
             return "noise dirs pruned"
         check("recent prunes noise dirs", prunes_noise_dirs)
 
         def output_is_ascii():
             registry.dispatch("recent_files",
-                              {"folder": "jarvis_recent_smoke"}).encode("ascii")
+                              {"folder": f"{_sb}"}).encode("ascii")
             return "output stayed pure ASCII"
         check("recent ascii-only output", output_is_ascii)
 
@@ -457,7 +470,7 @@ def t_recent():
         def no_match_is_friendly():
             out = registry.dispatch(
                 "recent_files",
-                {"folder": "jarvis_recent_smoke", "name": "*.zzz"})
+                {"folder": f"{_sb}", "name": "*.zzz"})
             assert "No files changed" in out, out
             return "no-match message ok"
         check("recent no-match message", no_match_is_friendly)
@@ -468,23 +481,23 @@ def t_recent():
             # wrong-type / junk 'days' is coerced to the default, never raises
             for junk in ("soon", -5, 0, True, 1e400, float("inf"), [1, 2], {}):
                 registry.dispatch(
-                    "recent_files", {"folder": "jarvis_recent_smoke", "days": junk})
+                    "recent_files", {"folder": f"{_sb}", "days": junk})
             # an absurd but finite window is clamped, not overflowed
             big = registry.dispatch(
-                "recent_files", {"folder": "jarvis_recent_smoke", "days": 10 ** 9})
+                "recent_files", {"folder": f"{_sb}", "days": 10 ** 9})
             assert "fresh_today.txt" in big, big
             # a "3 days" phrase in days extracts the number
             phrase = registry.dispatch(
-                "recent_files", {"folder": "jarvis_recent_smoke", "days": "3 days"})
+                "recent_files", {"folder": f"{_sb}", "days": "3 days"})
             assert "report.docx" in phrase and "notes.md" not in phrase, phrase
             # wrong-type folder/name must not raise
             registry.dispatch("recent_files", {"folder": 5, "name": 7})
             # bare '*' name filter is treated as no filter, not a crash
             registry.dispatch(
-                "recent_files", {"folder": "jarvis_recent_smoke", "name": "*"})
+                "recent_files", {"folder": f"{_sb}", "name": "*"})
             # a missing folder is a friendly message, not a crash
             miss = registry.dispatch(
-                "recent_files", {"folder": "jarvis_recent_smoke/nope"})
+                "recent_files", {"folder": f"{_sb}/nope"})
             assert "does not exist" in miss, miss
             return "guards held"
         check("recent hallucination guards", hallucination_guards)
@@ -505,7 +518,8 @@ def t_organize():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_organize_smoke"
+    _sb = "jarvis_organize_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     (sandbox / "sub").mkdir(parents=True, exist_ok=True)
 
@@ -520,8 +534,8 @@ def t_organize():
         def move_into_folder():
             mk("a.txt")
             out = registry.dispatch("move_file",
-                {"source": "jarvis_organize_smoke/a.txt",
-                 "dest": "jarvis_organize_smoke/sub"})
+                {"source": f"{_sb}/a.txt",
+                 "dest": f"{_sb}/sub"})
             assert "Moved" in out, out
             assert (sandbox / "sub" / "a.txt").exists()
             assert not (sandbox / "a.txt").exists(), "source not removed"
@@ -532,7 +546,7 @@ def t_organize():
             mk("old.txt")
             # a bare new name renames the file inside its OWN folder
             out = registry.dispatch("move_file",
-                {"source": "jarvis_organize_smoke/old.txt", "dest": "new.txt"})
+                {"source": f"{_sb}/old.txt", "dest": "new.txt"})
             assert "Renamed" in out, out
             assert (sandbox / "new.txt").exists()
             assert not (sandbox / "old.txt").exists()
@@ -542,7 +556,7 @@ def t_organize():
         def copy_duplicate_keeps_original():
             mk("notes.txt", "hello")
             out = registry.dispatch("copy_file",
-                {"source": "jarvis_organize_smoke/notes.txt",
+                {"source": f"{_sb}/notes.txt",
                  "dest": "notes_backup.txt"})
             assert "Copied" in out, out
             assert (sandbox / "notes.txt").exists(), "original vanished"
@@ -554,7 +568,7 @@ def t_organize():
             mk("src1.txt", "A")
             mk("keep.txt", "B")
             out = registry.dispatch("move_file",
-                {"source": "jarvis_organize_smoke/src1.txt", "dest": "keep.txt"})
+                {"source": f"{_sb}/src1.txt", "dest": "keep.txt"})
             assert "won't overwrite" in out, out
             # the existing file is untouched and the source is left in place
             assert (sandbox / "keep.txt").read_text(encoding="utf-8") == "B"
@@ -566,8 +580,8 @@ def t_organize():
             # the model may use from/to instead of source/dest -> still works
             mk("alt.txt")
             out = registry.dispatch("move_file",
-                {"from": "jarvis_organize_smoke/alt.txt",
-                 "to": "jarvis_organize_smoke/sub"})
+                {"from": f"{_sb}/alt.txt",
+                 "to": f"{_sb}/sub"})
             assert "Moved" in out, out
             assert (sandbox / "sub" / "alt.txt").exists()
             return "alt from/to arg names handled"
@@ -577,7 +591,7 @@ def t_organize():
             # moving OUT of the user's home must be refused, not run
             mk("esc.txt")
             r = registry.dispatch("move_file",
-                {"source": "jarvis_organize_smoke/esc.txt",
+                {"source": f"{_sb}/esc.txt",
                  "dest": "C:\\Windows\\esc.txt"})
             assert "only work inside your own folders" in r, r
             assert (sandbox / "esc.txt").exists(), "source moved despite guard"
@@ -586,14 +600,14 @@ def t_organize():
 
         def missing_source_is_friendly():
             r = registry.dispatch("move_file",
-                {"source": "jarvis_organize_smoke/ghost.txt", "dest": "x.txt"})
+                {"source": f"{_sb}/ghost.txt", "dest": "x.txt"})
             assert "can't find" in r, r
             return "missing source is a friendly message"
         check("organize missing source", missing_source_is_friendly)
 
         def refuses_directory_source():
             r = registry.dispatch("move_file",
-                {"source": "jarvis_organize_smoke/sub", "dest": "sub_renamed"})
+                {"source": f"{_sb}/sub", "dest": "sub_renamed"})
             assert "folder" in r and "only move or copy files" in r, r
             return "a folder source is refused"
         check("organize refuses directory source", refuses_directory_source)
@@ -602,7 +616,7 @@ def t_organize():
             org.MAX_COPY_BYTES = 4              # temporarily tiny
             mk("big.txt", "0123456789")         # 10 bytes > 4
             r = registry.dispatch("copy_file",
-                {"source": "jarvis_organize_smoke/big.txt", "dest": "big_copy.txt"})
+                {"source": f"{_sb}/big.txt", "dest": "big_copy.txt"})
             assert "too large" in r, r
             assert not (sandbox / "big_copy.txt").exists()
             org.MAX_COPY_BYTES = saved_cap
@@ -612,8 +626,8 @@ def t_organize():
         def output_is_ascii():
             mk("asc.txt")
             registry.dispatch("move_file",
-                {"source": "jarvis_organize_smoke/asc.txt",
-                 "dest": "jarvis_organize_smoke/sub"}).encode("ascii")
+                {"source": f"{_sb}/asc.txt",
+                 "dest": f"{_sb}/sub"}).encode("ascii")
             return "output stayed pure ASCII"
         check("organize ascii-only output", output_is_ascii)
 
@@ -645,7 +659,8 @@ def t_movefolder():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_movefolder_smoke"
+    _sb = "jarvis_movefolder_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
 
     def mkdir(rel):
@@ -666,8 +681,8 @@ def t_movefolder():
             mkfile("Taxes/receipt.txt", "r")
             mkdir("Documents")
             out = registry.dispatch("move_folder",
-                {"source": "jarvis_movefolder_smoke/Taxes",
-                 "dest": "jarvis_movefolder_smoke/Documents"})
+                {"source": f"{_sb}/Taxes",
+                 "dest": f"{_sb}/Documents"})
             assert "Moved folder" in out, out
             assert (sandbox / "Documents" / "Taxes" / "receipt.txt").exists()
             assert not (sandbox / "Taxes").exists(), "source folder not removed"
@@ -678,7 +693,7 @@ def t_movefolder():
             mkfile("Old/inner.txt", "i")
             # a bare new name renames the folder inside its OWN parent
             out = registry.dispatch("move_folder",
-                {"source": "jarvis_movefolder_smoke/Old", "dest": "New"})
+                {"source": f"{_sb}/Old", "dest": "New"})
             assert "Renamed folder" in out, out
             assert (sandbox / "New" / "inner.txt").exists()
             assert not (sandbox / "Old").exists()
@@ -689,8 +704,8 @@ def t_movefolder():
             mkfile("A/a.txt", "A")
             mkdir("Dest/A")            # a folder named A already sits in Dest
             out = registry.dispatch("move_folder",
-                {"source": "jarvis_movefolder_smoke/A",
-                 "dest": "jarvis_movefolder_smoke/Dest"})
+                {"source": f"{_sb}/A",
+                 "dest": f"{_sb}/Dest"})
             assert "won't overwrite or merge" in out, out
             assert (sandbox / "A" / "a.txt").exists(), "source moved despite guard"
             return "refuses to merge into an existing folder"
@@ -699,8 +714,8 @@ def t_movefolder():
         def refuses_into_own_subfolder():
             mkdir("Proj/sub")
             r = registry.dispatch("move_folder",
-                {"source": "jarvis_movefolder_smoke/Proj",
-                 "dest": "jarvis_movefolder_smoke/Proj/sub"})
+                {"source": f"{_sb}/Proj",
+                 "dest": f"{_sb}/Proj/sub"})
             assert "into itself" in r, r
             assert (sandbox / "Proj" / "sub").exists(), "tree damaged"
             return "refuses moving a folder into its own subfolder"
@@ -709,7 +724,7 @@ def t_movefolder():
         def refuses_file_source():
             mkfile("solo.txt", "s")
             r = registry.dispatch("move_folder",
-                {"source": "jarvis_movefolder_smoke/solo.txt", "dest": "gone"})
+                {"source": f"{_sb}/solo.txt", "dest": "gone"})
             assert "is a file" in r and "move_file" in r, r
             assert (sandbox / "solo.txt").exists()
             return "a file source is refused (points at move_file)"
@@ -717,7 +732,7 @@ def t_movefolder():
 
         def refuses_home_folder():
             r = registry.dispatch("move_folder",
-                {"source": str(home), "dest": "jarvis_movefolder_smoke/whoops"})
+                {"source": str(home), "dest": f"{_sb}/whoops"})
             assert "home folder" in r, r
             return "refuses to move the whole home folder"
         check("movefolder refuses home folder", refuses_home_folder)
@@ -726,8 +741,8 @@ def t_movefolder():
             mkfile("Alt/z.txt", "z")
             mkdir("Bin")
             out = registry.dispatch("move_folder",
-                {"from": "jarvis_movefolder_smoke/Alt",
-                 "into": "jarvis_movefolder_smoke/Bin"})
+                {"from": f"{_sb}/Alt",
+                 "into": f"{_sb}/Bin"})
             assert "Moved folder" in out, out
             assert (sandbox / "Bin" / "Alt" / "z.txt").exists()
             return "alt from/into arg names handled"
@@ -736,7 +751,7 @@ def t_movefolder():
         def containment_guard():
             mkdir("Esc")
             r = registry.dispatch("move_folder",
-                {"source": "jarvis_movefolder_smoke/Esc",
+                {"source": f"{_sb}/Esc",
                  "dest": "C:\\Windows\\Esc"})
             assert "only work inside your own folders" in r, r
             assert (sandbox / "Esc").exists(), "folder moved despite guard"
@@ -745,7 +760,7 @@ def t_movefolder():
 
         def missing_source_is_friendly():
             r = registry.dispatch("move_folder",
-                {"source": "jarvis_movefolder_smoke/ghost", "dest": "x"})
+                {"source": f"{_sb}/ghost", "dest": "x"})
             assert "can't find" in r, r
             return "missing source is a friendly message"
         check("movefolder missing source", missing_source_is_friendly)
@@ -754,8 +769,8 @@ def t_movefolder():
             mkdir("Asc")
             mkdir("AscDest")
             registry.dispatch("move_folder",
-                {"source": "jarvis_movefolder_smoke/Asc",
-                 "dest": "jarvis_movefolder_smoke/AscDest"}).encode("ascii")
+                {"source": f"{_sb}/Asc",
+                 "dest": f"{_sb}/AscDest"}).encode("ascii")
             return "output stayed pure ASCII"
         check("movefolder ascii-only output", output_is_ascii)
 
@@ -785,7 +800,8 @@ def t_copyfolder():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_copyfolder_smoke"
+    _sb = "jarvis_copyfolder_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
 
     def mkdir(rel):
@@ -807,8 +823,8 @@ def t_copyfolder():
             mkfile("Taxes/sub/note.txt", "note")
             mkdir("Backups")
             out = registry.dispatch("copy_folder",
-                {"source": "jarvis_copyfolder_smoke/Taxes",
-                 "dest": "jarvis_copyfolder_smoke/Backups"})
+                {"source": f"{_sb}/Taxes",
+                 "dest": f"{_sb}/Backups"})
             assert "Copied folder" in out, out
             # the copy exists with its full contents...
             assert (sandbox / "Backups" / "Taxes" / "receipt.txt").exists()
@@ -822,7 +838,7 @@ def t_copyfolder():
             mkfile("Counted/a.txt", "aaaa")
             mkfile("Counted/b.txt", "bb")
             out = registry.dispatch("copy_folder",
-                {"source": "jarvis_copyfolder_smoke/Counted",
+                {"source": f"{_sb}/Counted",
                  "dest": "Counted_copy"})
             assert "2 files" in out, out
             assert (sandbox / "Counted_copy" / "a.txt").exists()
@@ -834,8 +850,8 @@ def t_copyfolder():
             mkfile("Src/a.txt", "A")
             mkdir("Dst/Src")           # a folder named Src already sits in Dst
             out = registry.dispatch("copy_folder",
-                {"source": "jarvis_copyfolder_smoke/Src",
-                 "dest": "jarvis_copyfolder_smoke/Dst"})
+                {"source": f"{_sb}/Src",
+                 "dest": f"{_sb}/Dst"})
             assert "won't overwrite or merge" in out, out
             return "refuses to merge into an existing folder"
         check("copyfolder never overwrites", never_overwrites)
@@ -843,8 +859,8 @@ def t_copyfolder():
         def refuses_into_own_subfolder():
             mkdir("Proj/sub")
             r = registry.dispatch("copy_folder",
-                {"source": "jarvis_copyfolder_smoke/Proj",
-                 "dest": "jarvis_copyfolder_smoke/Proj/sub"})
+                {"source": f"{_sb}/Proj",
+                 "dest": f"{_sb}/Proj/sub"})
             assert "into itself" in r, r
             return "refuses copying a folder into its own subfolder"
         check("copyfolder refuses into own subfolder", refuses_into_own_subfolder)
@@ -852,7 +868,7 @@ def t_copyfolder():
         def refuses_file_source():
             mkfile("solo.txt", "s")
             r = registry.dispatch("copy_folder",
-                {"source": "jarvis_copyfolder_smoke/solo.txt", "dest": "gone"})
+                {"source": f"{_sb}/solo.txt", "dest": "gone"})
             assert "is a file" in r and "copy_file" in r, r
             assert (sandbox / "solo.txt").exists()
             return "a file source is refused (points at copy_file)"
@@ -860,7 +876,7 @@ def t_copyfolder():
 
         def refuses_home_folder():
             r = registry.dispatch("copy_folder",
-                {"source": str(home), "dest": "jarvis_copyfolder_smoke/whoops"})
+                {"source": str(home), "dest": f"{_sb}/whoops"})
             assert "home folder" in r, r
             return "refuses to copy the whole home folder"
         check("copyfolder refuses home folder", refuses_home_folder)
@@ -869,8 +885,8 @@ def t_copyfolder():
             mkfile("Alt/z.txt", "z")
             mkdir("Bin")
             out = registry.dispatch("copy_folder",
-                {"from": "jarvis_copyfolder_smoke/Alt",
-                 "into": "jarvis_copyfolder_smoke/Bin"})
+                {"from": f"{_sb}/Alt",
+                 "into": f"{_sb}/Bin"})
             assert "Copied folder" in out, out
             assert (sandbox / "Bin" / "Alt" / "z.txt").exists()
             assert (sandbox / "Alt" / "z.txt").exists(), "original gone"
@@ -880,7 +896,7 @@ def t_copyfolder():
         def containment_guard():
             mkdir("Esc")
             r = registry.dispatch("copy_folder",
-                {"source": "jarvis_copyfolder_smoke/Esc",
+                {"source": f"{_sb}/Esc",
                  "dest": "C:\\Windows\\Esc"})
             assert "only work inside your own folders" in r, r
             assert not pathlib.Path("C:\\Windows\\Esc").exists()
@@ -889,7 +905,7 @@ def t_copyfolder():
 
         def missing_source_is_friendly():
             r = registry.dispatch("copy_folder",
-                {"source": "jarvis_copyfolder_smoke/ghost", "dest": "x"})
+                {"source": f"{_sb}/ghost", "dest": "x"})
             assert "can't find" in r, r
             return "missing source is a friendly message"
         check("copyfolder missing source", missing_source_is_friendly)
@@ -902,8 +918,8 @@ def t_copyfolder():
             org.MAX_COPY_FILES = 2
             try:
                 r = registry.dispatch("copy_folder",
-                    {"source": "jarvis_copyfolder_smoke/Big",
-                     "dest": "jarvis_copyfolder_smoke/BigCopy"})
+                    {"source": f"{_sb}/Big",
+                     "dest": f"{_sb}/BigCopy"})
             finally:
                 org.MAX_COPY_FILES = saved
             assert "too many files" in r, r
@@ -914,8 +930,8 @@ def t_copyfolder():
         def output_is_ascii():
             mkdir("Asc")
             registry.dispatch("copy_folder",
-                {"source": "jarvis_copyfolder_smoke/Asc",
-                 "dest": "jarvis_copyfolder_smoke/AscCopy"}).encode("ascii")
+                {"source": f"{_sb}/Asc",
+                 "dest": f"{_sb}/AscCopy"}).encode("ascii")
             return "output stayed pure ASCII"
         check("copyfolder ascii-only output", output_is_ascii)
 
@@ -945,7 +961,8 @@ def t_makefolder():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_makefolder_smoke"
+    _sb = "jarvis_makefolder_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
@@ -954,7 +971,7 @@ def t_makefolder():
         def creates_nested_folder():
             # a multi-part path creates intermediate parents too
             out = registry.dispatch("make_folder",
-                {"path": "jarvis_makefolder_smoke/Taxes/2026"})
+                {"path": f"{_sb}/Taxes/2026"})
             assert "Created folder" in out, out
             assert (sandbox / "Taxes" / "2026").is_dir(), "folder not created"
             return "created a nested folder (parents too)"
@@ -963,7 +980,7 @@ def t_makefolder():
         def parent_plus_name():
             # the model may give a bare name + a separate parent folder
             out = registry.dispatch("make_folder",
-                {"path": "Projects", "parent": "jarvis_makefolder_smoke"})
+                {"path": "Projects", "parent": f"{_sb}"})
             assert "Created folder" in out, out
             assert (sandbox / "Projects").is_dir(), out
             return "parent + bare name joined"
@@ -971,8 +988,8 @@ def t_makefolder():
 
         def already_exists_is_friendly():
             # re-creating an existing folder is a friendly no-op, not an error
-            registry.dispatch("make_folder", {"path": "jarvis_makefolder_smoke/Dup"})
-            out = registry.dispatch("make_folder", {"path": "jarvis_makefolder_smoke/Dup"})
+            registry.dispatch("make_folder", {"path": f"{_sb}/Dup"})
+            out = registry.dispatch("make_folder", {"path": f"{_sb}/Dup"})
             assert "already exists" in out and "Error" not in out, out
             return "existing folder is a friendly no-op"
         check("make_folder existing folder", already_exists_is_friendly)
@@ -981,7 +998,7 @@ def t_makefolder():
             # a path that already exists as a FILE is refused, never overwritten
             (sandbox / "note.txt").write_text("keep me", encoding="utf-8")
             out = registry.dispatch("make_folder",
-                {"path": "jarvis_makefolder_smoke/note.txt"})
+                {"path": f"{_sb}/note.txt"})
             assert "already exists as a file" in out, out
             assert (sandbox / "note.txt").read_text(encoding="utf-8") == "keep me"
             return "won't clobber an existing file with a folder"
@@ -990,7 +1007,7 @@ def t_makefolder():
         def alt_arg_names():
             # the model may use name=/directory= instead of path
             out = registry.dispatch("make_folder",
-                {"name": "jarvis_makefolder_smoke/Alt"})
+                {"name": f"{_sb}/Alt"})
             assert "Created folder" in out, out
             assert (sandbox / "Alt").is_dir(), out
             return "alt name/directory arg names handled"
@@ -1003,14 +1020,14 @@ def t_makefolder():
             assert not pathlib.Path("C:\\Windows\\Jarvis_evil").exists()
             # a ..-escape out of home is also refused (resolved + re-checked)
             r2 = registry.dispatch("make_folder",
-                {"path": "jarvis_makefolder_smoke/../../../Windows/Jarvis_evil2"})
+                {"path": f"{_sb}/../../../Windows/Jarvis_evil2"})
             assert "only work inside your own folders" in r2, r2
             return "escape outside home blocked"
         check("make_folder containment guard", containment_guard)
 
         def depth_cap():
             org.MAX_NEW_DEPTH = 3              # temporarily tiny
-            deep = "jarvis_makefolder_smoke/" + "/".join(f"d{i}" for i in range(10))
+            deep = f"{_sb}/" + "/".join(f"d{i}" for i in range(10))
             r = registry.dispatch("make_folder", {"path": deep})
             assert "too deeply" in r, r
             assert not (sandbox / "d0").exists(), "deep tree created despite cap"
@@ -1020,7 +1037,7 @@ def t_makefolder():
 
         def output_is_ascii():
             registry.dispatch("make_folder",
-                {"path": "jarvis_makefolder_smoke/Asc"}).encode("ascii")
+                {"path": f"{_sb}/Asc"}).encode("ascii")
             return "output stayed pure ASCII"
         check("make_folder ascii-only output", output_is_ascii)
 
@@ -1054,7 +1071,8 @@ def t_duplicates():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_dupe_smoke"
+    _sb = "jarvis_dupe_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     (sandbox / "a").mkdir(parents=True, exist_ok=True)
     (sandbox / "b").mkdir(parents=True, exist_ok=True)
@@ -1078,7 +1096,7 @@ def t_duplicates():
 
     try:
         def finds_content_duplicates():
-            out = registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_smoke"})
+            out = registry.dispatch("find_duplicates", {"folder": f"{_sb}"})
             assert "Error" not in out, out
             # two duplicate SETS found (the triple + the double)
             assert "2 sets of duplicate files" in out, out
@@ -1103,7 +1121,7 @@ def t_duplicates():
         def pruning_and_default_home():
             # a duplicate hidden in a pruned dir must not be counted
             (sandbox / "node_modules" / "photo_dup.bin").write_bytes(big)
-            out = registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_smoke"})
+            out = registry.dispatch("find_duplicates", {"folder": f"{_sb}"})
             assert "node_modules" not in out, "pruned dir leaked into output"
             assert "Set 1: 3 copies" in out, out  # still 3, not 4
             # no-arg is valid: scans the whole home folder without crashing
@@ -1128,9 +1146,9 @@ def t_duplicates():
         check("find_duplicates no-duplicates message", no_duplicates_message)
 
         def alt_arg_names():
-            out = registry.dispatch("find_duplicates", {"path": "jarvis_dupe_smoke"})
+            out = registry.dispatch("find_duplicates", {"path": f"{_sb}"})
             assert "sets of duplicate files" in out, out
-            out2 = registry.dispatch("find_duplicates", {"directory": "jarvis_dupe_smoke"})
+            out2 = registry.dispatch("find_duplicates", {"directory": f"{_sb}"})
             assert "sets of duplicate files" in out2, out2
             return "alt path/directory arg names handled"
         check("find_duplicates alt arg names", alt_arg_names)
@@ -1141,7 +1159,7 @@ def t_duplicates():
             assert "only work inside your own folders" in r, r
             # a ..-escape out of home is also refused (resolved + re-checked)
             r2 = registry.dispatch("find_duplicates",
-                {"folder": "jarvis_dupe_smoke/../../../Windows"})
+                {"folder": f"{_sb}/../../../Windows"})
             assert "only work inside your own folders" in r2, r2
             return "escape outside home blocked"
         check("find_duplicates containment guard", containment_guard)
@@ -1149,16 +1167,16 @@ def t_duplicates():
         def file_source_and_missing():
             # pointed at a FILE (not a folder) -> friendly message, no crash
             r = registry.dispatch("find_duplicates",
-                {"folder": "jarvis_dupe_smoke/unique.bin"})
+                {"folder": f"{_sb}/unique.bin"})
             assert "is a file" in r and "folder" in r, r
             # a missing folder -> friendly message
-            r2 = registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_smoke/nope"})
+            r2 = registry.dispatch("find_duplicates", {"folder": f"{_sb}/nope"})
             assert "can't find" in r2, r2
             return "file source + missing folder -> friendly messages"
         check("find_duplicates file/missing guards", file_source_and_missing)
 
         def output_is_ascii():
-            registry.dispatch("find_duplicates", {"folder": "jarvis_dupe_smoke"}).encode("ascii")
+            registry.dispatch("find_duplicates", {"folder": f"{_sb}"}).encode("ascii")
             registry.dispatch("find_duplicates", {}).encode("ascii")
             registry.dispatch("find_duplicates", {"folder": "C:\\Windows"}).encode("ascii")
             return "output stayed pure ASCII"
@@ -1172,7 +1190,7 @@ def t_duplicates():
             registry.dispatch("find_duplicates", {"folder": None})
             # an unexpected extra arg is dropped, the call still succeeds
             out = registry.dispatch("find_duplicates",
-                {"folder": "jarvis_dupe_smoke", "reason": "curious"})
+                {"folder": f"{_sb}", "reason": "curious"})
             assert "sets of duplicate files" in out, out
             return "guards held"
         check("find_duplicates hallucination guards", hallucination_guards)
@@ -1194,7 +1212,8 @@ def t_fileinfo():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_fileinfo_smoke"
+    _sb = "jarvis_fileinfo_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
 
     def _rm(_f, path, _e):  # so a read-only file can't block cleanup on Windows
         try:
@@ -1216,7 +1235,7 @@ def t_fileinfo():
 
     try:
         def text_file_facts():
-            out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/notes.txt"})
+            out = registry.dispatch("file_info", {"path": f"{_sb}/notes.txt"})
             assert "Error" not in out, out
             assert out.splitlines()[0] == "notes.txt", out
             assert "Type: text (.txt)" in out, out
@@ -1231,7 +1250,7 @@ def t_fileinfo():
         check("file_info text file facts", text_file_facts)
 
         def binary_has_no_line_count():
-            out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/pic.bin"})
+            out = registry.dispatch("file_info", {"path": f"{_sb}/pic.bin"})
             assert "Error" not in out, out
             assert "Lines:" not in out, "binary should not get a line/word count"
             assert "SHA-256:" in out, out                    # still checksummed
@@ -1239,7 +1258,7 @@ def t_fileinfo():
         check("file_info binary no line count", binary_has_no_line_count)
 
         def empty_file():
-            out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/empty.dat"})
+            out = registry.dispatch("file_info", {"path": f"{_sb}/empty.dat"})
             assert "Size: 0 B (0 bytes)" in out, out
             assert "SHA-256: (empty file)" in out, out
             assert "Lines:" not in out, out                  # nothing to count
@@ -1247,14 +1266,14 @@ def t_fileinfo():
         check("file_info empty file", empty_file)
 
         def read_only_flag():
-            out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/locked.txt"})
+            out = registry.dispatch("file_info", {"path": f"{_sb}/locked.txt"})
             assert "Read-only: yes" in out, out
             return "read-only attribute reported"
         check("file_info read-only flag", read_only_flag)
 
         def alt_arg_names():
             for key in ("file", "source", "document"):
-                out = registry.dispatch("file_info", {key: "jarvis_fileinfo_smoke/notes.txt"})
+                out = registry.dispatch("file_info", {key: f"{_sb}/notes.txt"})
                 assert "Type: text (.txt)" in out, (key, out)
             return "alt file/source/document arg names handled"
         check("file_info alt arg names", alt_arg_names)
@@ -1264,7 +1283,7 @@ def t_fileinfo():
             saved = fileinfo.MAX_HASH_BYTES
             fileinfo.MAX_HASH_BYTES = 5           # notes.txt is 29 B > 5
             try:
-                out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/notes.txt"})
+                out = registry.dispatch("file_info", {"path": f"{_sb}/notes.txt"})
                 assert "SHA-256: (skipped" in out, out
                 assert "over" in out, out
             finally:
@@ -1277,7 +1296,7 @@ def t_fileinfo():
             saved = fileinfo.MAX_TEXT_BYTES
             fileinfo.MAX_TEXT_BYTES = 4           # notes.txt is 29 B > 4
             try:
-                out = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/notes.txt"})
+                out = registry.dispatch("file_info", {"path": f"{_sb}/notes.txt"})
                 assert "first part only" in out, out
             finally:
                 fileinfo.MAX_TEXT_BYTES = saved
@@ -1288,22 +1307,22 @@ def t_fileinfo():
             r = registry.dispatch("file_info", {"path": "C:\\Windows\\notepad.exe"})
             assert "only work inside your own folders" in r, r
             r2 = registry.dispatch("file_info",
-                {"path": "jarvis_fileinfo_smoke/../../../Windows/notepad.exe"})
+                {"path": f"{_sb}/../../../Windows/notepad.exe"})
             assert "only work inside your own folders" in r2, r2
             return "escape outside home blocked"
         check("file_info containment guard", containment_guard)
 
         def folder_and_missing():
-            r = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke"})
+            r = registry.dispatch("file_info", {"path": f"{_sb}"})
             assert "is a folder" in r and "folder_size" in r, r   # steered correctly
-            r2 = registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/nope.txt"})
+            r2 = registry.dispatch("file_info", {"path": f"{_sb}/nope.txt"})
             assert "can't find" in r2, r2
             return "folder source steered + missing file friendly"
         check("file_info folder/missing guards", folder_and_missing)
 
         def output_is_ascii():
-            registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/notes.txt"}).encode("ascii")
-            registry.dispatch("file_info", {"path": "jarvis_fileinfo_smoke/pic.bin"}).encode("ascii")
+            registry.dispatch("file_info", {"path": f"{_sb}/notes.txt"}).encode("ascii")
+            registry.dispatch("file_info", {"path": f"{_sb}/pic.bin"}).encode("ascii")
             registry.dispatch("file_info", {"path": "C:\\Windows\\notepad.exe"}).encode("ascii")
             return "output stayed pure ASCII"
         check("file_info ascii-only output", output_is_ascii)
@@ -1318,7 +1337,7 @@ def t_fileinfo():
             registry.dispatch("file_info", {"path": None})
             # an unexpected extra arg is dropped, the call still succeeds
             out = registry.dispatch("file_info",
-                {"path": "jarvis_fileinfo_smoke/notes.txt", "reason": "curious"})
+                {"path": f"{_sb}/notes.txt", "reason": "curious"})
             assert "Type: text (.txt)" in out, out
             return "guards held"
         check("file_info hallucination guards", hallucination_guards)
@@ -1339,7 +1358,8 @@ def t_compare():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_compare_smoke"
+    _sb = "jarvis_compare_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
@@ -1355,7 +1375,7 @@ def t_compare():
     try:
         def different_files():
             out = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/b.txt"})
+                {"file1": f"{_sb}/a.txt", "file2": f"{_sb}/b.txt"})
             assert "Error" not in out, out
             assert "different" in out, out
             # b has: 1 changed line (counts as +1 -1) plus 1 added line -> 2 added, 1 removed
@@ -1369,7 +1389,7 @@ def t_compare():
 
         def identical_content():
             out = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/same1.txt", "file2": "jarvis_compare_smoke/same2.txt"})
+                {"file1": f"{_sb}/same1.txt", "file2": f"{_sb}/same2.txt"})
             assert "identical" in out and "Error" not in out, out
             assert "added" not in out, out
             return "identical content -> identical message"
@@ -1378,7 +1398,7 @@ def t_compare():
         def ascii_transliteration():
             # a real UTF-8 file with curly quotes/accents must not crash or leak non-ASCII
             out = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/curly.txt", "file2": "jarvis_compare_smoke/plain.txt"})
+                {"file1": f"{_sb}/curly.txt", "file2": f"{_sb}/plain.txt"})
             assert "Error" not in out, out
             assert "different" in out, out
             out.encode("ascii")                        # non-ASCII forced to ASCII
@@ -1387,45 +1407,45 @@ def t_compare():
 
         def same_file_twice():
             out = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/a.txt"})
+                {"file1": f"{_sb}/a.txt", "file2": f"{_sb}/a.txt"})
             assert "same file" in out and "Error" not in out, out
             return "same path twice -> friendly note"
         check("compare_files same file twice", same_file_twice)
 
         def alt_arg_names():
             out = registry.dispatch("compare_files",
-                {"first": "jarvis_compare_smoke/a.txt", "second": "jarvis_compare_smoke/b.txt"})
+                {"first": f"{_sb}/a.txt", "second": f"{_sb}/b.txt"})
             assert "different" in out, out
             out2 = registry.dispatch("compare_files",
-                {"old": "jarvis_compare_smoke/same1.txt", "new": "jarvis_compare_smoke/same2.txt"})
+                {"old": f"{_sb}/same1.txt", "new": f"{_sb}/same2.txt"})
             assert "identical" in out2, out2
             return "alt first/second/old/new arg names handled"
         check("compare_files alt arg names", alt_arg_names)
 
         def binary_refused():
             out = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/pic.bin", "file2": "jarvis_compare_smoke/a.txt"})
+                {"file1": f"{_sb}/pic.bin", "file2": f"{_sb}/a.txt"})
             assert "binary" in out and "Error" in out, out
             return "binary file refused"
         check("compare_files binary refused", binary_refused)
 
         def containment_guard():
             r = registry.dispatch("compare_files",
-                {"file1": "C:\\Windows\\win.ini", "file2": "jarvis_compare_smoke/a.txt"})
+                {"file1": "C:\\Windows\\win.ini", "file2": f"{_sb}/a.txt"})
             assert "only work inside your own folders" in r, r
             r2 = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/a.txt",
-                 "file2": "jarvis_compare_smoke/../../../Windows/win.ini"})
+                {"file1": f"{_sb}/a.txt",
+                 "file2": f"{_sb}/../../../Windows/win.ini"})
             assert "only work inside your own folders" in r2, r2
             return "escape outside home blocked for both files"
         check("compare_files containment guard", containment_guard)
 
         def folder_and_missing():
             r = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke", "file2": "jarvis_compare_smoke/a.txt"})
+                {"file1": f"{_sb}", "file2": f"{_sb}/a.txt"})
             assert "is a folder" in r, r
             r2 = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/nope.txt"})
+                {"file1": f"{_sb}/a.txt", "file2": f"{_sb}/nope.txt"})
             assert "can't find" in r2, r2
             return "folder source + missing file friendly messages"
         check("compare_files folder/missing guards", folder_and_missing)
@@ -1435,7 +1455,7 @@ def t_compare():
             compare.MAX_FILE_BYTES = 5           # a.txt is > 5 bytes
             try:
                 out = registry.dispatch("compare_files",
-                    {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/b.txt"})
+                    {"file1": f"{_sb}/a.txt", "file2": f"{_sb}/b.txt"})
                 assert "too big" in out and "Error" in out, out
             finally:
                 compare.MAX_FILE_BYTES = saved
@@ -1445,14 +1465,14 @@ def t_compare():
         def hallucination_guards():
             assert "Error" in registry.dispatch("compare_files", {})               # missing both
             assert "Error" in registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/a.txt"})                            # missing one
+                {"file1": f"{_sb}/a.txt"})                            # missing one
             assert "Error" in registry.dispatch("compare_files", {"file1": "", "file2": ""})
             # wrong types / weird shapes must not raise
             registry.dispatch("compare_files", {"file1": 123, "file2": ["a"]})
             registry.dispatch("compare_files", {"file1": {}, "file2": None})
             # an unexpected extra arg is dropped, the call still succeeds
             out = registry.dispatch("compare_files",
-                {"file1": "jarvis_compare_smoke/a.txt", "file2": "jarvis_compare_smoke/b.txt",
+                {"file1": f"{_sb}/a.txt", "file2": f"{_sb}/b.txt",
                  "reason": "curious"})
             assert "different" in out, out
             return "guards held"
@@ -1472,7 +1492,8 @@ def t_disk():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_disk_smoke"
+    _sb = "jarvis_disk_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     (sandbox / "big").mkdir(parents=True, exist_ok=True)
     (sandbox / "small").mkdir(parents=True, exist_ok=True)
@@ -1487,7 +1508,7 @@ def t_disk():
 
     try:
         def totals_and_pruning():
-            out = registry.dispatch("folder_size", {"folder": "jarvis_disk_smoke"})
+            out = registry.dispatch("folder_size", {"folder": f"{_sb}"})
             # 4 real files counted (a, b, c, top); node_modules pruned entirely
             assert "4 files" in out, out
             assert "node_modules" not in out, "pruned dir leaked into output"
@@ -1508,22 +1529,22 @@ def t_disk():
         def single_file():
             # pointed at a file, it reports just that file's size
             out = registry.dispatch("folder_size",
-                {"folder": "jarvis_disk_smoke/top.bin"})
+                {"folder": f"{_sb}/top.bin"})
             assert "top.bin is 500 B" in out, out
             return "single file size reported"
         check("folder_size on a single file", single_file)
 
         def empty_folder():
             (sandbox / "empty").mkdir(exist_ok=True)
-            out = registry.dispatch("folder_size", {"folder": "jarvis_disk_smoke/empty"})
+            out = registry.dispatch("folder_size", {"folder": f"{_sb}/empty"})
             assert "empty" in out and "0 B" in out, out
             return "empty folder -> 0 B"
         check("folder_size empty folder", empty_folder)
 
         def alt_arg_names():
-            out = registry.dispatch("folder_size", {"path": "jarvis_disk_smoke"})
+            out = registry.dispatch("folder_size", {"path": f"{_sb}"})
             assert "4 files" in out, out
-            out2 = registry.dispatch("folder_size", {"directory": "jarvis_disk_smoke"})
+            out2 = registry.dispatch("folder_size", {"directory": f"{_sb}"})
             assert "4 files" in out2, out2
             return "alt path/directory arg names handled"
         check("folder_size alt arg names", alt_arg_names)
@@ -1534,19 +1555,19 @@ def t_disk():
             assert "only work inside your own folders" in r, r
             # a ..-escape out of home is also refused (resolved + re-checked)
             r2 = registry.dispatch("folder_size",
-                {"folder": "jarvis_disk_smoke/../../../Windows"})
+                {"folder": f"{_sb}/../../../Windows"})
             assert "only work inside your own folders" in r2, r2
             return "escape outside home blocked"
         check("folder_size containment guard", containment_guard)
 
         def missing_folder():
-            r = registry.dispatch("folder_size", {"folder": "jarvis_disk_smoke/nope"})
+            r = registry.dispatch("folder_size", {"folder": f"{_sb}/nope"})
             assert "can't find" in r, r
             return "missing folder -> friendly message"
         check("folder_size missing folder", missing_folder)
 
         def output_is_ascii():
-            registry.dispatch("folder_size", {"folder": "jarvis_disk_smoke"}).encode("ascii")
+            registry.dispatch("folder_size", {"folder": f"{_sb}"}).encode("ascii")
             registry.dispatch("folder_size", {}).encode("ascii")
             return "output stayed pure ASCII"
         check("folder_size ascii-only output", output_is_ascii)
@@ -1559,7 +1580,7 @@ def t_disk():
             registry.dispatch("folder_size", {"folder": None})
             # an unexpected extra arg is dropped, call still succeeds
             out = registry.dispatch("folder_size",
-                {"folder": "jarvis_disk_smoke", "reason": "curious"})
+                {"folder": f"{_sb}", "reason": "curious"})
             assert "4 files" in out, out
             return "guards held"
         check("folder_size hallucination guards", hallucination_guards)
@@ -1580,7 +1601,8 @@ def t_document():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_doc_smoke"
+    _sb = "jarvis_doc_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
@@ -1610,14 +1632,14 @@ def t_document():
 
     try:
         def happy_docx():
-            out = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/report.docx"})
+            out = registry.dispatch("read_document", {"path": f"{_sb}/report.docx"})
             assert "Hello sir, this is the budget report." in out, out
             assert "word" in out and "report.docx" in out, out  # header
             return "docx text extracted"
         check("read_document reads a .docx", happy_docx)
 
         def ascii_transliteration():
-            out = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/report.docx"})
+            out = registry.dispatch("read_document", {"path": f"{_sb}/report.docx"})
             out.encode("ascii")  # must be pure ASCII (would raise otherwise)
             assert '"1200"' in out, out          # curly quotes -> straight
             assert "cafe" in out, out            # accent stripped, not 'caf?'
@@ -1626,38 +1648,38 @@ def t_document():
         check("read_document ascii-only output", ascii_transliteration)
 
         def reads_odt():
-            out = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/notes.odt"})
+            out = registry.dispatch("read_document", {"path": f"{_sb}/notes.odt"})
             assert "Meeting notes" in out and "Buy milk and bread." in out, out
             return "odt text extracted"
         check("read_document reads a .odt", reads_odt)
 
         def empty_document():
-            out = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/empty.docx"})
+            out = registry.dispatch("read_document", {"path": f"{_sb}/empty.docx"})
             assert "no readable text" in out, out
             return "empty doc -> friendly message"
         check("read_document empty document", empty_document)
 
         def alt_arg_names():
-            out = registry.dispatch("read_document", {"file": "jarvis_doc_smoke/report.docx"})
+            out = registry.dispatch("read_document", {"file": f"{_sb}/report.docx"})
             assert "budget report" in out, out
-            out2 = registry.dispatch("read_document", {"document": "jarvis_doc_smoke/report.docx"})
+            out2 = registry.dispatch("read_document", {"document": f"{_sb}/report.docx"})
             assert "budget report" in out2, out2
             return "alt file/document arg names handled"
         check("read_document alt arg names", alt_arg_names)
 
         def unsupported_types():
             (sandbox / "x.pdf").write_bytes(b"%PDF-1.4 fake")
-            r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/x.pdf"})
+            r = registry.dispatch("read_document", {"path": f"{_sb}/x.pdf"})
             assert "PDF" in r and "Error" in r, r
             (sandbox / "plain.txt").write_text("hi")
-            r2 = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/plain.txt"})
+            r2 = registry.dispatch("read_document", {"path": f"{_sb}/plain.txt"})
             assert "read_file" in r2, r2
             return "pdf + plain-text steered elsewhere"
         check("read_document unsupported types", unsupported_types)
 
         def corrupt_document():
             (sandbox / "bad.docx").write_bytes(b"this is not a zip at all")
-            r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/bad.docx"})
+            r = registry.dispatch("read_document", {"path": f"{_sb}/bad.docx"})
             assert "corrupt" in r or "isn't a valid" in r, r
             return "corrupt/non-zip -> friendly, no raise"
         check("read_document corrupt document", corrupt_document)
@@ -1666,15 +1688,15 @@ def t_document():
             r = registry.dispatch("read_document", {"path": "C:\\Windows\\explorer.exe"})
             assert "only work inside your own folders" in r, r
             r2 = registry.dispatch("read_document",
-                {"path": "jarvis_doc_smoke/../../../Windows/x.docx"})
+                {"path": f"{_sb}/../../../Windows/x.docx"})
             assert "only work inside your own folders" in r2, r2
             return "escape outside home blocked"
         check("read_document containment guard", containment_guard)
 
         def folder_and_missing():
-            r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke"})
+            r = registry.dispatch("read_document", {"path": f"{_sb}"})
             assert "is a folder" in r, r
-            r2 = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/nope.docx"})
+            r2 = registry.dispatch("read_document", {"path": f"{_sb}/nope.docx"})
             assert "can't find" in r2, r2
             return "folder + missing -> friendly messages"
         check("read_document folder/missing guards", folder_and_missing)
@@ -1685,7 +1707,7 @@ def t_document():
             orig = document.MAX_XML_BYTES
             document.MAX_XML_BYTES = 1
             try:
-                r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/report.docx"})
+                r = registry.dispatch("read_document", {"path": f"{_sb}/report.docx"})
                 assert "no readable text" in r, r
             finally:
                 document.MAX_XML_BYTES = orig
@@ -1696,7 +1718,7 @@ def t_document():
             orig = document.MAX_CHARS
             document.MAX_CHARS = 10
             try:
-                r = registry.dispatch("read_document", {"path": "jarvis_doc_smoke/report.docx"})
+                r = registry.dispatch("read_document", {"path": f"{_sb}/report.docx"})
                 assert "[truncated]" in r, r
             finally:
                 document.MAX_CHARS = orig
@@ -1713,7 +1735,7 @@ def t_document():
             assert "Error" in registry.dispatch("read_document", {})  # missing arg
             # an unexpected extra arg is dropped, call still succeeds
             out = registry.dispatch("read_document",
-                {"path": "jarvis_doc_smoke/report.docx", "reason": "curious"})
+                {"path": f"{_sb}/report.docx", "reason": "curious"})
             assert "budget report" in out, out
             return "guards held"
         check("read_document hallucination guards", hallucination_guards)
@@ -1777,7 +1799,8 @@ def t_pdf():
     have_pypdf = pdf._import_pypdf() is not None
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_pdf_smoke"
+    _sb = "jarvis_pdf_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
@@ -1790,14 +1813,14 @@ def t_pdf():
     try:
         if have_pypdf:
             def happy():
-                out = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/report.pdf"})
+                out = registry.dispatch("read_pdf", {"path": f"{_sb}/report.pdf"})
                 assert "Hello sir, this is the budget report." in out, out
                 assert "report.pdf" in out and "page" in out, out  # header
                 return "pdf text extracted"
             check("read_pdf reads a .pdf", happy)
 
             def ascii_only():
-                out = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/report.pdf"})
+                out = registry.dispatch("read_pdf", {"path": f"{_sb}/report.pdf"})
                 out.encode("ascii")  # pure ASCII or this raises
                 assert '"1200"' in out, out       # curly quotes -> straight
                 assert "cafe" in out, out          # accent stripped, not 'caf?'
@@ -1806,15 +1829,15 @@ def t_pdf():
             check("read_pdf ascii-only output", ascii_only)
 
             def scanned_no_text():
-                out = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/blank.pdf"})
+                out = registry.dispatch("read_pdf", {"path": f"{_sb}/blank.pdf"})
                 assert "no readable text" in out, out
                 return "image-only/empty pdf -> friendly message"
             check("read_pdf no-text pdf", scanned_no_text)
 
             def alt_arg_names():
-                out = registry.dispatch("read_pdf", {"file": "jarvis_pdf_smoke/report.pdf"})
+                out = registry.dispatch("read_pdf", {"file": f"{_sb}/report.pdf"})
                 assert "budget report" in out, out
-                out2 = registry.dispatch("read_pdf", {"document": "jarvis_pdf_smoke/report.pdf"})
+                out2 = registry.dispatch("read_pdf", {"document": f"{_sb}/report.pdf"})
                 assert "budget report" in out2, out2
                 return "alt file/document arg names handled"
             check("read_pdf alt arg names", alt_arg_names)
@@ -1827,14 +1850,14 @@ def t_pdf():
                 w.encrypt("secret")
                 with open(sandbox / "locked.pdf", "wb") as fh:
                     w.write(fh)
-                out = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/locked.pdf"})
+                out = registry.dispatch("read_pdf", {"path": f"{_sb}/locked.pdf"})
                 assert "password" in out and "Error" in out, out
                 return "password-protected pdf -> friendly message"
             check("read_pdf encrypted pdf", encrypted)
 
             def corrupt():
                 (sandbox / "bad.pdf").write_bytes(b"this is not a pdf at all")
-                r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/bad.pdf"})
+                r = registry.dispatch("read_pdf", {"path": f"{_sb}/bad.pdf"})
                 assert "isn't a valid PDF" in r or "couldn't read" in r, r
                 return "corrupt/non-pdf -> friendly, no raise"
             check("read_pdf corrupt pdf", corrupt)
@@ -1843,7 +1866,7 @@ def t_pdf():
                 orig = pdf.MAX_CHARS
                 pdf.MAX_CHARS = 10
                 try:
-                    r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/report.pdf"})
+                    r = registry.dispatch("read_pdf", {"path": f"{_sb}/report.pdf"})
                     assert "[truncated]" in r, r
                 finally:
                     pdf.MAX_CHARS = orig
@@ -1858,7 +1881,7 @@ def t_pdf():
             orig = pdf._import_pypdf
             pdf._import_pypdf = lambda: None
             try:
-                r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/report.pdf"})
+                r = registry.dispatch("read_pdf", {"path": f"{_sb}/report.pdf"})
                 assert "pypdf" in r and "Error" in r, r
             finally:
                 pdf._import_pypdf = orig
@@ -1867,10 +1890,10 @@ def t_pdf():
 
         def wrong_type_steer():
             (sandbox / "note.txt").write_text("hi")
-            r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/note.txt"})
+            r = registry.dispatch("read_pdf", {"path": f"{_sb}/note.txt"})
             assert "read_file" in r, r
             (sandbox / "doc.docx").write_bytes(b"PK\x03\x04fake")
-            r2 = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/doc.docx"})
+            r2 = registry.dispatch("read_pdf", {"path": f"{_sb}/doc.docx"})
             assert "read_document" in r2, r2
             return "non-pdf types steered elsewhere"
         check("read_pdf wrong-type steer", wrong_type_steer)
@@ -1879,15 +1902,15 @@ def t_pdf():
             r = registry.dispatch("read_pdf", {"path": "C:\\Windows\\explorer.exe"})
             assert "only work inside your own folders" in r, r
             r2 = registry.dispatch("read_pdf",
-                {"path": "jarvis_pdf_smoke/../../../Windows/x.pdf"})
+                {"path": f"{_sb}/../../../Windows/x.pdf"})
             assert "only work inside your own folders" in r2, r2
             return "escape outside home blocked"
         check("read_pdf containment guard", containment_guard)
 
         def folder_and_missing():
-            r = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke"})
+            r = registry.dispatch("read_pdf", {"path": f"{_sb}"})
             assert "is a folder" in r, r
-            r2 = registry.dispatch("read_pdf", {"path": "jarvis_pdf_smoke/nope.pdf"})
+            r2 = registry.dispatch("read_pdf", {"path": f"{_sb}/nope.pdf"})
             assert "can't find" in r2, r2
             return "folder + missing -> friendly messages"
         check("read_pdf folder/missing guards", folder_and_missing)
@@ -1903,7 +1926,7 @@ def t_pdf():
             if have_pypdf:
                 # a stray extra arg is dropped, the call still succeeds
                 out = registry.dispatch("read_pdf",
-                    {"path": "jarvis_pdf_smoke/report.pdf", "reason": "curious"})
+                    {"path": f"{_sb}/report.pdf", "reason": "curious"})
                 assert "budget report" in out, out
             return "guards held"
         check("read_pdf hallucination guards", hallucination_guards)
@@ -1929,7 +1952,8 @@ def t_excel():
     have_openpyxl = excel._import_openpyxl() is not None
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_excel_smoke"
+    _sb = "jarvis_excel_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
@@ -1951,7 +1975,7 @@ def t_excel():
     try:
         if have_openpyxl:
             def happy():
-                out = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx"})
+                out = registry.dispatch("read_excel", {"path": f"{_sb}/budget.xlsx"})
                 assert "2 sheets" in out and "Sales" in out and "Empty" in out, out
                 # blank row not counted -> 3 data rows, 4 columns
                 assert "3 data rows" in out and "4 column" in out, out
@@ -1961,7 +1985,7 @@ def t_excel():
             check("read_excel summarises a workbook", happy)
 
             def ascii_only():
-                out = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx"})
+                out = registry.dispatch("read_excel", {"path": f"{_sb}/budget.xlsx"})
                 out.encode("ascii")                     # pure ASCII or this raises
                 assert "Cafe" in out, out                # accent stripped, not 'Caf?'
                 assert '"note"' in out, out              # curly quotes -> straight
@@ -1970,7 +1994,7 @@ def t_excel():
             check("read_excel ascii-only output", ascii_only)
 
             def int_float_dates():
-                out = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx"})
+                out = registry.dispatch("read_excel", {"path": f"{_sb}/budget.xlsx"})
                 assert "2026-01-01" in out, out          # date, no 00:00:00
                 assert "3400.5" in out, out              # real decimal kept
                 assert "1200.0" not in out, out          # integral float shown as int
@@ -1979,7 +2003,7 @@ def t_excel():
 
             def rows_preview():
                 out = registry.dispatch("read_excel",
-                    {"path": "jarvis_excel_smoke/budget.xlsx", "rows": 1})
+                    {"path": f"{_sb}/budget.xlsx", "rows": 1})
                 assert "First 1 row" in out, out
                 assert "Alice" in out and "Bob" not in out, out
                 return "rows preview count honored"
@@ -1988,30 +2012,30 @@ def t_excel():
             def pick_sheet():
                 # by name AND by number; the Empty sheet reports empty
                 byname = registry.dispatch("read_excel",
-                    {"path": "jarvis_excel_smoke/budget.xlsx", "sheet": "Empty"})
+                    {"path": f"{_sb}/budget.xlsx", "sheet": "Empty"})
                 assert "is empty" in byname, byname
                 bynum = registry.dispatch("read_excel",
-                    {"path": "jarvis_excel_smoke/budget.xlsx", "sheet": 1})
+                    {"path": f"{_sb}/budget.xlsx", "sheet": 1})
                 assert "'Sales'" in bynum and "3 data rows" in bynum, bynum
                 missing = registry.dispatch("read_excel",
-                    {"path": "jarvis_excel_smoke/budget.xlsx", "sheet": "Ghost"})
+                    {"path": f"{_sb}/budget.xlsx", "sheet": "Ghost"})
                 assert "no sheet called" in missing and "Sales" in missing, missing
                 return "sheet selection by name/number + missing-sheet guard"
             check("read_excel sheet selection", pick_sheet)
 
             def alt_arg_names():
                 out = registry.dispatch("read_excel",
-                    {"workbook": "jarvis_excel_smoke/budget.xlsx"})
+                    {"workbook": f"{_sb}/budget.xlsx"})
                 assert "3 data rows" in out, out
                 out2 = registry.dispatch("read_excel",
-                    {"file": "jarvis_excel_smoke/budget.xlsx", "tab": "Sales"})
+                    {"file": f"{_sb}/budget.xlsx", "tab": "Sales"})
                 assert "'Sales'" in out2, out2
                 return "alt workbook/file/tab arg names handled"
             check("read_excel alt arg names", alt_arg_names)
 
             def corrupt():
                 (sandbox / "bad.xlsx").write_bytes(b"this is not a real xlsx")
-                r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/bad.xlsx"})
+                r = registry.dispatch("read_excel", {"path": f"{_sb}/bad.xlsx"})
                 assert "isn't a valid Excel workbook" in r, r
                 return "corrupt/non-xlsx -> friendly, no raise"
             check("read_excel corrupt workbook", corrupt)
@@ -2020,7 +2044,7 @@ def t_excel():
                 orig = excel.MAX_ROWS
                 excel.MAX_ROWS = 2                       # header + 1 row, then stop
                 try:
-                    r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx"})
+                    r = registry.dispatch("read_excel", {"path": f"{_sb}/budget.xlsx"})
                     assert "stopped early" in r, r
                 finally:
                     excel.MAX_ROWS = orig
@@ -2036,7 +2060,7 @@ def t_excel():
             orig = excel._import_openpyxl
             excel._import_openpyxl = lambda: None
             try:
-                r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/any.xlsx"})
+                r = registry.dispatch("read_excel", {"path": f"{_sb}/any.xlsx"})
                 assert "openpyxl" in r and "Error" in r, r
             finally:
                 excel._import_openpyxl = orig
@@ -2045,13 +2069,13 @@ def t_excel():
 
         def wrong_type_steer():
             (sandbox / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8")
-            r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/data.csv"})
+            r = registry.dispatch("read_excel", {"path": f"{_sb}/data.csv"})
             assert "read_csv" in r, r
             (sandbox / "old.xls").write_bytes(b"\xd0\xcf\x11\xe0old")
-            r2 = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/old.xls"})
+            r2 = registry.dispatch("read_excel", {"path": f"{_sb}/old.xls"})
             assert "old Excel" in r2 and "save it as .xlsx" in r2, r2
             (sandbox / "note.txt").write_text("hi", encoding="utf-8")
-            r3 = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/note.txt"})
+            r3 = registry.dispatch("read_excel", {"path": f"{_sb}/note.txt"})
             assert "isn't an Excel workbook" in r3, r3
             return "non-xlsx types steered elsewhere"
         check("read_excel wrong-type steer", wrong_type_steer)
@@ -2060,15 +2084,15 @@ def t_excel():
             r = registry.dispatch("read_excel", {"path": "C:\\Windows\\book.xlsx"})
             assert "only work inside your own folders" in r, r
             r2 = registry.dispatch("read_excel",
-                {"path": "jarvis_excel_smoke/../../../Windows/x.xlsx"})
+                {"path": f"{_sb}/../../../Windows/x.xlsx"})
             assert "only work inside your own folders" in r2, r2
             return "escape outside home blocked"
         check("read_excel containment guard", containment_guard)
 
         def folder_and_missing():
-            r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke"})
+            r = registry.dispatch("read_excel", {"path": f"{_sb}"})
             assert "is a folder" in r, r
-            r2 = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/nope.xlsx"})
+            r2 = registry.dispatch("read_excel", {"path": f"{_sb}/nope.xlsx"})
             assert "can't find" in r2, r2
             return "folder + missing -> friendly messages"
         check("read_excel folder/missing guards", folder_and_missing)
@@ -2079,14 +2103,14 @@ def t_excel():
             registry.dispatch("read_excel", {"path": ["a"]})
             registry.dispatch("read_excel", {"path": {}})
             registry.dispatch("read_excel", {"path": None})
-            registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx", "rows": "junk"})
-            registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx", "sheet": []})
+            registry.dispatch("read_excel", {"path": f"{_sb}/budget.xlsx", "rows": "junk"})
+            registry.dispatch("read_excel", {"path": f"{_sb}/budget.xlsx", "sheet": []})
             assert "Error" in registry.dispatch("read_excel", {"path": ""})
             assert "Error" in registry.dispatch("read_excel", {})   # missing arg
             if have_openpyxl:
                 # a stray extra arg is dropped, the call still succeeds
                 out = registry.dispatch("read_excel",
-                    {"path": "jarvis_excel_smoke/budget.xlsx", "reason": "curious"})
+                    {"path": f"{_sb}/budget.xlsx", "reason": "curious"})
                 assert "3 data rows" in out, out
             return "guards held"
         check("read_excel hallucination guards", hallucination_guards)
@@ -2107,7 +2131,8 @@ def t_explorer():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_explorer_smoke"
+    _sb = "jarvis_explorer_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     (sandbox / "sub").mkdir(parents=True, exist_ok=True)
     (sandbox / "sub" / "report.txt").write_text("hello", encoding="utf-8")
@@ -2121,17 +2146,17 @@ def t_explorer():
     try:
         def open_a_folder():
             opened.clear()
-            out = registry.dispatch("open_folder", {"folder": "jarvis_explorer_smoke"})
+            out = registry.dispatch("open_folder", {"folder": f"{_sb}"})
             assert "Opened" in out and "Error" not in out, out
             assert len(opened) == 1 and opened[0][1] is False, opened
-            assert opened[0][0].endswith("jarvis_explorer_smoke"), opened
+            assert opened[0][0].endswith(f"{_sb}"), opened
             return "folder opened (not as a file)"
         check("open_folder opens a folder", open_a_folder)
 
         def reveal_a_file():
             opened.clear()
             out = registry.dispatch("open_folder",
-                {"folder": "jarvis_explorer_smoke/sub/report.txt"})
+                {"folder": f"{_sb}/sub/report.txt"})
             assert "highlighted" in out and "Error" not in out, out
             # a file is revealed (is_file True), pointing at the file itself
             assert len(opened) == 1 and opened[0][1] is True, opened
@@ -2149,9 +2174,9 @@ def t_explorer():
 
         def alt_arg_names():
             opened.clear()
-            out = registry.dispatch("open_folder", {"path": "jarvis_explorer_smoke"})
+            out = registry.dispatch("open_folder", {"path": f"{_sb}"})
             assert "Opened" in out, out
-            out2 = registry.dispatch("open_folder", {"directory": "jarvis_explorer_smoke/sub"})
+            out2 = registry.dispatch("open_folder", {"directory": f"{_sb}/sub"})
             assert "Opened" in out2, out2
             return "alt path/directory arg names handled"
         check("open_folder alt arg names", alt_arg_names)
@@ -2163,7 +2188,7 @@ def t_explorer():
             assert "only work inside your own folders" in r, r
             # a ..-escape out of home is also refused (resolved + re-checked)
             r2 = registry.dispatch("open_folder",
-                {"folder": "jarvis_explorer_smoke/../../../Windows"})
+                {"folder": f"{_sb}/../../../Windows"})
             assert "only work inside your own folders" in r2, r2
             assert opened == [], "a blocked path must never launch Explorer"
             return "escape outside home blocked, nothing launched"
@@ -2171,7 +2196,7 @@ def t_explorer():
 
         def missing_target():
             opened.clear()
-            r = registry.dispatch("open_folder", {"folder": "jarvis_explorer_smoke/nope"})
+            r = registry.dispatch("open_folder", {"folder": f"{_sb}/nope"})
             assert "can't find" in r, r
             assert opened == [], "a missing target must never launch Explorer"
             return "missing target -> friendly message"
@@ -2185,7 +2210,7 @@ def t_explorer():
                 raise OSError("explorer exploded")
             explorer._reveal = boom
             try:
-                r = registry.dispatch("open_folder", {"folder": "jarvis_explorer_smoke"})
+                r = registry.dispatch("open_folder", {"folder": f"{_sb}"})
                 assert "Error" in r and "couldn't open" in r, r
             finally:
                 explorer._reveal = lambda path, is_file: opened.append((str(path), is_file))
@@ -2193,7 +2218,7 @@ def t_explorer():
         check("open_folder launch-failure guard", launch_failure_guard)
 
         def output_is_ascii():
-            registry.dispatch("open_folder", {"folder": "jarvis_explorer_smoke"}).encode("ascii")
+            registry.dispatch("open_folder", {"folder": f"{_sb}"}).encode("ascii")
             registry.dispatch("open_folder", {}).encode("ascii")
             registry.dispatch("open_folder", {"folder": "C:\\Windows"}).encode("ascii")
             return "output stayed pure ASCII"
@@ -2208,7 +2233,7 @@ def t_explorer():
             # an unexpected extra arg is dropped, the call still succeeds
             opened.clear()
             out = registry.dispatch("open_folder",
-                {"folder": "jarvis_explorer_smoke", "reason": "curious"})
+                {"folder": f"{_sb}", "reason": "curious"})
             assert "Opened" in out, out
             return "guards held"
         check("open_folder hallucination guards", hallucination_guards)
@@ -2230,7 +2255,8 @@ def t_archive():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_archive_smoke"
+    _sb = "jarvis_archive_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     (sandbox / "sub").mkdir(parents=True, exist_ok=True)
 
@@ -2254,7 +2280,7 @@ def t_archive():
     try:
         def zip_a_folder():
             out = registry.dispatch("zip_files",
-                {"sources": "jarvis_archive_smoke", "dest": "jarvis_archive_bk.zip"})
+                {"sources": f"{_sb}", "dest": "jarvis_archive_bk.zip"})
             assert "Backed up" in out, out
             z = _zpath("jarvis_archive_bk.zip")
             assert z.exists(), "archive not created"
@@ -2272,7 +2298,7 @@ def t_archive():
         def zip_several_files():
             # a comma-separated list of files is accepted
             out = registry.dispatch("zip_files",
-                {"sources": "jarvis_archive_smoke/a.txt, jarvis_archive_smoke/sub/b.txt",
+                {"sources": f"{_sb}/a.txt, {_sb}/sub/b.txt",
                  "dest": "two_files"})   # missing .zip suffix is added
             assert "Backed up 2 files" in out, out
             z = _zpath("two_files.zip")
@@ -2284,7 +2310,7 @@ def t_archive():
         def alt_arg_names():
             # the model may use 'files'/'to' instead of sources/dest
             out = registry.dispatch("zip_files",
-                {"files": "jarvis_archive_smoke/a.txt", "to": "alt_backup.zip"})
+                {"files": f"{_sb}/a.txt", "to": "alt_backup.zip"})
             assert "Backed up" in out, out
             _zpath("alt_backup.zip").unlink()
             return "alt files/to arg names handled"
@@ -2294,7 +2320,7 @@ def t_archive():
             z = _zpath("keep.zip")
             z.write_text("existing", encoding="utf-8")
             out = registry.dispatch("zip_files",
-                {"sources": "jarvis_archive_smoke/a.txt", "dest": "keep.zip"})
+                {"sources": f"{_sb}/a.txt", "dest": "keep.zip"})
             assert "won't overwrite" in out, out
             assert z.read_text(encoding="utf-8") == "existing", "clobbered!"
             z.unlink()
@@ -2308,7 +2334,7 @@ def t_archive():
             assert "nothing to back up" in src, src
             assert not _zpath("w.zip").exists()
             dst = registry.dispatch("zip_files",
-                {"sources": "jarvis_archive_smoke/a.txt", "dest": "C:\\Windows\\x.zip"})
+                {"sources": f"{_sb}/a.txt", "dest": "C:\\Windows\\x.zip"})
             assert "only work inside your own folders" in dst, dst
             return "escape outside home blocked (source + dest)"
         check("archive containment guard", containment_guard)
@@ -2317,7 +2343,7 @@ def t_archive():
             arc.MAX_TOTAL_BYTES = 4              # temporarily tiny
             mk("big.txt", "0123456789")          # 10 bytes > 4
             out = registry.dispatch("zip_files",
-                {"sources": "jarvis_archive_smoke/big.txt", "dest": "big.zip"})
+                {"sources": f"{_sb}/big.txt", "dest": "big.zip"})
             # the only file exceeds the cap -> nothing to back up, no archive
             assert "nothing to back up" in out or "too big" in out, out
             assert not _zpath("big.zip").exists()
@@ -2327,7 +2353,7 @@ def t_archive():
 
         def output_is_ascii():
             registry.dispatch("zip_files",
-                {"sources": "jarvis_archive_smoke/a.txt", "dest": "ascii_bk.zip"}).encode("ascii")
+                {"sources": f"{_sb}/a.txt", "dest": "ascii_bk.zip"}).encode("ascii")
             p = _zpath("ascii_bk.zip")
             if p.exists():
                 p.unlink()
@@ -2337,11 +2363,11 @@ def t_archive():
         def hallucination_guards():
             # empty / missing args -> friendly error, never a crash, no archive
             assert "Error" in registry.dispatch("zip_files", {"sources": "", "dest": "x.zip"})
-            assert "Error" in registry.dispatch("zip_files", {"sources": "jarvis_archive_smoke", "dest": ""})
+            assert "Error" in registry.dispatch("zip_files", {"sources": f"{_sb}", "dest": ""})
             assert "Error" in registry.dispatch("zip_files", {})
             # a non-existent source is a friendly message, not a crash
             miss = registry.dispatch("zip_files",
-                {"sources": "jarvis_archive_smoke/ghost.txt", "dest": "g.zip"})
+                {"sources": f"{_sb}/ghost.txt", "dest": "g.zip"})
             assert "nothing to back up" in miss, miss
             assert not _zpath("g.zip").exists()
             # wrong types must not raise
@@ -2349,7 +2375,7 @@ def t_archive():
             registry.dispatch("zip_files", {"sources": ["a"], "dest": {}})
             # a list source shape is accepted (JSON array from the model)
             out = registry.dispatch("zip_files",
-                {"sources": ["jarvis_archive_smoke/a.txt"], "dest": "listshape.zip"})
+                {"sources": [f"{_sb}/a.txt"], "dest": "listshape.zip"})
             assert "Backed up" in out, out
             _zpath("listshape.zip").unlink()
             return "guards held"
@@ -2381,7 +2407,8 @@ def t_extract():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_extract_smoke"
+    _sb = "jarvis_extract_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
     escape_marker = home / "jarvis_extract_escaped.txt"
@@ -2405,7 +2432,7 @@ def t_extract():
 
         def extract_default_folder():
             out = registry.dispatch("unzip_files",
-                {"source": "jarvis_extract_smoke/good.zip"})
+                {"source": f"{_sb}/good.zip"})
             assert "Extracted 2 files" in out, out
             # default dest is a folder named after the archive, beside it
             d = sandbox / "good"
@@ -2419,8 +2446,8 @@ def t_extract():
 
         def extract_named_dest():
             out = registry.dispatch("unzip_files",
-                {"source": "jarvis_extract_smoke/good.zip",
-                 "dest": "jarvis_extract_smoke/out"})
+                {"source": f"{_sb}/good.zip",
+                 "dest": f"{_sb}/out"})
             assert "Extracted" in out, out
             assert (sandbox / "out" / "a.txt").exists(), out
             return "extracted into a named folder"
@@ -2430,8 +2457,8 @@ def t_extract():
             # a file already at the target is skipped, not clobbered
             (sandbox / "out" / "a.txt").write_text("KEEP", encoding="utf-8")
             out = registry.dispatch("unzip_files",
-                {"source": "jarvis_extract_smoke/good.zip",
-                 "dest": "jarvis_extract_smoke/out"})
+                {"source": f"{_sb}/good.zip",
+                 "dest": f"{_sb}/out"})
             assert (sandbox / "out" / "a.txt").read_text(encoding="utf-8") == "KEEP", out
             assert "already existed" in out or "already extracted" in out, out
             return "existing files never overwritten"
@@ -2442,8 +2469,8 @@ def t_extract():
             mkzip("evil.zip", [("safe.txt", "ok"),
                                ("../../jarvis_extract_escaped.txt", "PWNED")])
             out = registry.dispatch("unzip_files",
-                {"source": "jarvis_extract_smoke/evil.zip",
-                 "dest": "jarvis_extract_smoke/evilout"})
+                {"source": f"{_sb}/evil.zip",
+                 "dest": f"{_sb}/evilout"})
             # the safe file lands inside, the escaping one is refused
             assert (sandbox / "evilout" / "safe.txt").exists(), out
             assert not escape_marker.exists(), "ZIP-SLIP ESCAPED THE FOLDER"
@@ -2456,7 +2483,7 @@ def t_extract():
             s = registry.dispatch("unzip_files", {"source": "C:\\Windows\\x.zip"})
             assert "only work inside your own folders" in s or "can't find" in s, s
             d = registry.dispatch("unzip_files",
-                {"source": "jarvis_extract_smoke/good.zip", "dest": "C:\\Windows\\out"})
+                {"source": f"{_sb}/good.zip", "dest": "C:\\Windows\\out"})
             assert "only work inside your own folders" in d, d
             return "escape outside home blocked (source + dest)"
         check("extract containment guard", containment_guard)
@@ -2464,14 +2491,14 @@ def t_extract():
         def bad_zip():
             (sandbox / "notzip.zip").write_text("this is not a zip", encoding="utf-8")
             out = registry.dispatch("unzip_files",
-                {"source": "jarvis_extract_smoke/notzip.zip"})
+                {"source": f"{_sb}/notzip.zip"})
             assert "isn't a valid .zip" in out, out
             return "corrupt archive reported, not crashed"
         check("extract bad zip", bad_zip)
 
         def alt_arg_names():
             out = registry.dispatch("unzip_files",
-                {"archive": "jarvis_extract_smoke/good.zip", "into": "jarvis_extract_smoke/alt"})
+                {"archive": f"{_sb}/good.zip", "into": f"{_sb}/alt"})
             assert "Extracted" in out, out
             assert (sandbox / "alt" / "a.txt").exists(), out
             return "alt archive/into arg names handled"
@@ -2479,8 +2506,8 @@ def t_extract():
 
         def output_is_ascii():
             registry.dispatch("unzip_files",
-                {"source": "jarvis_extract_smoke/good.zip",
-                 "dest": "jarvis_extract_smoke/asciiout"}).encode("ascii")
+                {"source": f"{_sb}/good.zip",
+                 "dest": f"{_sb}/asciiout"}).encode("ascii")
             return "output stayed pure ASCII"
         check("extract ascii-only output", output_is_ascii)
 
@@ -2488,9 +2515,9 @@ def t_extract():
             assert "Error" in registry.dispatch("unzip_files", {"source": ""})
             assert "Error" in registry.dispatch("unzip_files", {})
             miss = registry.dispatch("unzip_files",
-                {"source": "jarvis_extract_smoke/ghost.zip"})
+                {"source": f"{_sb}/ghost.zip"})
             assert "can't find" in miss, miss
-            folder = registry.dispatch("unzip_files", {"source": "jarvis_extract_smoke"})
+            folder = registry.dispatch("unzip_files", {"source": f"{_sb}"})
             assert "not a .zip" in folder or "folder" in folder, folder
             # wrong types must not raise
             registry.dispatch("unzip_files", {"source": 123, "dest": 456})
@@ -2520,7 +2547,8 @@ def t_recycle():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_recycle_smoke"
+    _sb = "jarvis_recycle_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     (sandbox / "sub").mkdir(parents=True, exist_ok=True)
     trash = sandbox / "_fake_trash"
@@ -2546,7 +2574,7 @@ def t_recycle():
         def happy_path():
             mk("draft.txt", "old draft")
             out = registry.dispatch("recycle_file",
-                {"path": "jarvis_recycle_smoke/draft.txt"})
+                {"path": f"{_sb}/draft.txt"})
             assert "Recycle Bin" in out and "restore" in out, out
             # the file left its place (removed from source)...
             assert not (sandbox / "draft.txt").exists(), "file not removed"
@@ -2559,7 +2587,7 @@ def t_recycle():
             # the model may pass file=/source= instead of path
             mk("alt.txt")
             out = registry.dispatch("recycle_file",
-                {"file": "jarvis_recycle_smoke/alt.txt"})
+                {"file": f"{_sb}/alt.txt"})
             assert "Recycle Bin" in out, out
             assert not (sandbox / "alt.txt").exists()
             return "alt file/source arg names handled"
@@ -2573,7 +2601,7 @@ def t_recycle():
         check("recycle containment guard", containment_guard)
 
         def refuses_directory():
-            r = registry.dispatch("recycle_file", {"path": "jarvis_recycle_smoke/sub"})
+            r = registry.dispatch("recycle_file", {"path": f"{_sb}/sub"})
             assert "folder" in r and "recycle_folder" in r, r
             assert (sandbox / "sub").exists(), "folder was binned!"
             return "a folder is refused (steered to recycle_folder)"
@@ -2581,7 +2609,7 @@ def t_recycle():
 
         def missing_source_is_friendly():
             r = registry.dispatch("recycle_file",
-                {"path": "jarvis_recycle_smoke/ghost.txt"})
+                {"path": f"{_sb}/ghost.txt"})
             assert "can't find" in r, r
             return "missing source is a friendly message"
         check("recycle missing source", missing_source_is_friendly)
@@ -2590,7 +2618,7 @@ def t_recycle():
             rec.MAX_RECYCLE_BYTES = 4              # temporarily tiny
             mk("big.txt", "0123456789")            # 10 bytes > 4
             r = registry.dispatch("recycle_file",
-                {"path": "jarvis_recycle_smoke/big.txt"})
+                {"path": f"{_sb}/big.txt"})
             assert "too large" in r, r
             # refused: the file is left exactly where it was, never touched
             assert (sandbox / "big.txt").exists(), "oversized file was binned"
@@ -2605,7 +2633,7 @@ def t_recycle():
             rec._send_to_recycle_bin = boom
             mk("stay.txt")
             r = registry.dispatch("recycle_file",
-                {"path": "jarvis_recycle_smoke/stay.txt"})
+                {"path": f"{_sb}/stay.txt"})
             assert "couldn't delete it" in r, r
             assert (sandbox / "stay.txt").exists(), "file vanished despite failure"
             rec._send_to_recycle_bin = fake_recycle
@@ -2615,7 +2643,7 @@ def t_recycle():
         def output_is_ascii():
             mk("asc.txt")
             registry.dispatch("recycle_file",
-                {"path": "jarvis_recycle_smoke/asc.txt"}).encode("ascii")
+                {"path": f"{_sb}/asc.txt"}).encode("ascii")
             return "output stayed pure ASCII"
         check("recycle ascii-only output", output_is_ascii)
 
@@ -2636,7 +2664,7 @@ def t_recycle():
             mk("proj/notes.txt", "hi")
             mk("proj/sub/deep.txt", "there")
             out = registry.dispatch("recycle_folder",
-                {"path": "jarvis_recycle_smoke/proj"})
+                {"path": f"{_sb}/proj"})
             assert "Recycle Bin" in out and "restore" in out, out
             assert "2 files" in out, out                 # honest file count
             # the folder left its place...
@@ -2649,7 +2677,7 @@ def t_recycle():
         def folder_empty_ok():
             (sandbox / "emptydir").mkdir(exist_ok=True)
             out = registry.dispatch("recycle_folder",
-                {"path": "jarvis_recycle_smoke/emptydir"})
+                {"path": f"{_sb}/emptydir"})
             assert "Recycle Bin" in out and "empty" in out, out
             assert not (sandbox / "emptydir").exists()
             return "an empty folder is binned (reported empty)"
@@ -2658,7 +2686,7 @@ def t_recycle():
         def folder_alt_arg_names():
             mk("altdir/a.txt")
             out = registry.dispatch("recycle_folder",
-                {"folder": "jarvis_recycle_smoke/altdir"})
+                {"folder": f"{_sb}/altdir"})
             assert "Recycle Bin" in out, out
             assert not (sandbox / "altdir").exists()
             return "alt folder/source arg names handled"
@@ -2668,7 +2696,7 @@ def t_recycle():
             # pointed at a FILE it must refuse and steer to recycle_file
             mk("single.txt")
             r = registry.dispatch("recycle_folder",
-                {"path": "jarvis_recycle_smoke/single.txt"})
+                {"path": f"{_sb}/single.txt"})
             assert "file" in r and "recycle_file" in r, r
             assert (sandbox / "single.txt").exists(), "file was binned!"
             return "a file is refused (steered to recycle_file)"
@@ -2689,7 +2717,7 @@ def t_recycle():
 
         def folder_missing_source():
             r = registry.dispatch("recycle_folder",
-                {"path": "jarvis_recycle_smoke/ghostdir"})
+                {"path": f"{_sb}/ghostdir"})
             assert "can't find" in r, r
             return "missing folder is a friendly message"
         check("recycle_folder missing source", folder_missing_source)
@@ -2698,7 +2726,7 @@ def t_recycle():
             rec.MAX_RECYCLE_BYTES = 4               # temporarily tiny
             mk("bigdir/data.txt", "0123456789")     # 10 bytes > 4
             r = registry.dispatch("recycle_folder",
-                {"path": "jarvis_recycle_smoke/bigdir"})
+                {"path": f"{_sb}/bigdir"})
             assert "too large" in r, r
             assert (sandbox / "bigdir").exists(), "oversized folder was binned"
             rec.MAX_RECYCLE_BYTES = saved_cap
@@ -2709,7 +2737,7 @@ def t_recycle():
             rec.MAX_RECYCLE_FILES = 1               # temporarily tiny
             mk("manydir/a.txt"); mk("manydir/b.txt")
             r = registry.dispatch("recycle_folder",
-                {"path": "jarvis_recycle_smoke/manydir"})
+                {"path": f"{_sb}/manydir"})
             assert "too many files" in r, r
             assert (sandbox / "manydir").exists(), "folder over count cap binned"
             rec.MAX_RECYCLE_FILES = saved_files
@@ -2722,7 +2750,7 @@ def t_recycle():
             rec._send_to_recycle_bin = boom
             mk("staydir/x.txt")
             r = registry.dispatch("recycle_folder",
-                {"path": "jarvis_recycle_smoke/staydir"})
+                {"path": f"{_sb}/staydir"})
             assert "couldn't delete it" in r, r
             assert (sandbox / "staydir").exists(), "folder vanished despite failure"
             rec._send_to_recycle_bin = fake_recycle
@@ -2732,7 +2760,7 @@ def t_recycle():
         def folder_output_is_ascii():
             mk("ascdir/y.txt")
             registry.dispatch("recycle_folder",
-                {"path": "jarvis_recycle_smoke/ascdir"}).encode("ascii")
+                {"path": f"{_sb}/ascdir"}).encode("ascii")
             return "output stayed pure ASCII"
         check("recycle_folder ascii-only output", folder_output_is_ascii)
 
@@ -2806,11 +2834,11 @@ def t_tasks():
     from jarvis.tools import registry
 
     # isolate: use a temp store so we never touch the user's real to-do list
-    import tempfile, os, pathlib
-    tk._STORE = pathlib.Path(tempfile.gettempdir()) / "jarvis_tasks_smoke.json"
-    for p in (tk._STORE, tk._STORE.with_name("tasks.corrupt.json")):
-        if p.exists():
-            os.remove(p)
+    import tempfile, os, pathlib, shutil
+    # unique per-run store DIR so overlapping smoke runs never collide -- the
+    # fixed-name corrupt sidecar (tasks.corrupt.json) lands in this dir too
+    _tkdir = tempfile.mkdtemp(prefix="jarvis_tasks_smoke_%d_" % os.getpid())
+    tk._STORE = pathlib.Path(_tkdir) / "tasks.json"
 
     def happy_path():
         assert "Added" in registry.dispatch("add_task", {"task": "buy milk"})
@@ -2879,6 +2907,9 @@ def t_tasks():
         assert tk._STORE.with_name("tasks.corrupt.json").exists()
         return "corrupt store recovered"
     check("tasks corrupt-store recovery", corrupt_store_recovers)
+
+    # check() swallows assertion errors, so control always reaches here
+    shutil.rmtree(_tkdir, ignore_errors=True)
 
 
 def t_calc():
@@ -3098,11 +3129,11 @@ def t_reminders():
     from jarvis.tools import registry
 
     # isolate: use a temp store so we never touch the user's real reminders
-    import tempfile, os, pathlib
-    rem._STORE = pathlib.Path(tempfile.gettempdir()) / "jarvis_rem_smoke.json"
-    for p in (rem._STORE, rem._STORE.with_name("reminders.corrupt.json")):
-        if p.exists():
-            os.remove(p)
+    import tempfile, os, pathlib, shutil
+    # unique per-run store DIR so overlapping smoke runs never collide -- the
+    # fixed-name corrupt sidecar (reminders.corrupt.json) lands in this dir too
+    _remdir = tempfile.mkdtemp(prefix="jarvis_rem_smoke_%d_" % os.getpid())
+    rem._STORE = pathlib.Path(_remdir) / "reminders.json"
 
     def happy_path():
         out = registry.dispatch("set_reminder",
@@ -3186,6 +3217,9 @@ def t_reminders():
         assert rem._STORE.with_name("reminders.corrupt.json").exists()
         return "corrupt store recovered"
     check("reminders corrupt-store recovery", corrupt_store_recovers)
+
+    # check() swallows assertion errors, so control always reaches here
+    shutil.rmtree(_remdir, ignore_errors=True)
 
 
 def t_dispatch():
@@ -3371,7 +3405,8 @@ def t_textstats():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_words_smoke"
+    _sb = "jarvis_words_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
@@ -3403,14 +3438,14 @@ def t_textstats():
 
         def counts_plain_file():
             out = registry.dispatch(
-                "count_words", {"path": "jarvis_words_smoke/essay.txt"})
+                "count_words", {"path": f"{_sb}/essay.txt"})
             assert "essay.txt" in out and "5 words" in out, out
             return "counted a plain-text file"
         check("count_words counts a plain-text file", counts_plain_file)
 
         def counts_docx():
             out = registry.dispatch(
-                "count_words", {"path": "jarvis_words_smoke/resume.docx"})
+                "count_words", {"path": f"{_sb}/resume.docx"})
             assert "resume.docx" in out and "4 words" in out, out
             return "counted a Word .docx document"
         check("count_words counts a docx", counts_docx)
@@ -3419,17 +3454,17 @@ def t_textstats():
             # a common 8B slip: the file name dropped into 'text' -> still counts
             # the FILE, not the literal string
             out = registry.dispatch(
-                "count_words", {"text": "jarvis_words_smoke/essay.txt"})
+                "count_words", {"text": f"{_sb}/essay.txt"})
             assert "essay.txt" in out and "5 words" in out, out
             return "a filename in the text field is read as a file"
         check("count_words filename-in-text", filename_in_text_field)
 
         def refuses_pdf_and_binary():
-            pdf = registry.dispatch("count_words", {"path": "jarvis_words_smoke/a.pdf"})
+            pdf = registry.dispatch("count_words", {"path": f"{_sb}/a.pdf"})
             assert "PDF" in pdf, pdf
-            png = registry.dispatch("count_words", {"path": "jarvis_words_smoke/pic.png"})
+            png = registry.dispatch("count_words", {"path": f"{_sb}/pic.png"})
             assert "isn't a text file" in png, png
-            nul = registry.dispatch("count_words", {"path": "jarvis_words_smoke/blob.log"})
+            nul = registry.dispatch("count_words", {"path": f"{_sb}/blob.log"})
             assert "doesn't look like text" in nul, nul
             return "pdf + binary + NUL-byte files refused"
         check("count_words refuses non-text files", refuses_pdf_and_binary)
@@ -3443,9 +3478,9 @@ def t_textstats():
         check("count_words containment guard", containment_guard)
 
         def folder_and_missing():
-            fol = registry.dispatch("count_words", {"path": "jarvis_words_smoke"})
+            fol = registry.dispatch("count_words", {"path": f"{_sb}"})
             assert "is a folder" in fol, fol
-            miss = registry.dispatch("count_words", {"path": "jarvis_words_smoke/ghost.txt"})
+            miss = registry.dispatch("count_words", {"path": f"{_sb}/ghost.txt"})
             assert "can't find" in miss, miss
             return "folder source + missing file are friendly messages"
         check("count_words folder + missing", folder_and_missing)
@@ -3463,7 +3498,7 @@ def t_textstats():
             registry.dispatch(
                 "count_words", {"text": "cafe resume naive expose budget"}).encode("ascii")
             registry.dispatch(
-                "count_words", {"path": "jarvis_words_smoke/essay.txt"}).encode("ascii")
+                "count_words", {"path": f"{_sb}/essay.txt"}).encode("ascii")
             return "output stayed pure ASCII"
         check("count_words ascii-only output", output_is_ascii)
 
@@ -3715,7 +3750,8 @@ def t_spreadsheet():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_csv_smoke"
+    _sb = "jarvis_csv_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
@@ -3743,7 +3779,7 @@ def t_spreadsheet():
     saved_rows = sp.MAX_ROWS
     try:
         def happy_csv():
-            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/sales.csv"})
+            out = registry.dispatch("read_csv", {"path": f"{_sb}/sales.csv"})
             assert "sales.csv" in out, out
             assert "3 data rows" in out and "3 columns" in out, out
             assert "comma-separated" in out, out
@@ -3753,51 +3789,51 @@ def t_spreadsheet():
         check("read_csv summarises a CSV", happy_csv)
 
         def preview_count():
-            deflt = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/many.csv"})
+            deflt = registry.dispatch("read_csv", {"path": f"{_sb}/many.csv"})
             assert "6 data rows" in deflt and "First 5 rows" in deflt, deflt
             limited = registry.dispatch(
-                "read_csv", {"path": "jarvis_csv_smoke/many.csv", "rows": 2})
+                "read_csv", {"path": f"{_sb}/many.csv", "rows": 2})
             assert "First 2 rows" in limited, limited
             return "preview defaults to 5 and respects the rows arg"
         check("read_csv preview row count", preview_count)
 
         def blank_rows_skipped():
-            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/gappy.csv"})
+            out = registry.dispatch("read_csv", {"path": f"{_sb}/gappy.csv"})
             assert "2 data rows" in out, out       # the blank interior row not counted
             return "blank rows are not counted"
         check("read_csv skips blank rows", blank_rows_skipped)
 
         def tsv_file():
-            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/data.tsv"})
+            out = registry.dispatch("read_csv", {"path": f"{_sb}/data.tsv"})
             assert "2 data rows" in out and "2 columns" in out, out
             assert "tab-separated" in out, out
             return "read a tab-separated .tsv"
         check("read_csv reads a TSV", tsv_file)
 
         def semicolon_sniffed():
-            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/semi.csv"})
+            out = registry.dispatch("read_csv", {"path": f"{_sb}/semi.csv"})
             assert "3 columns" in out and "2 data rows" in out, out
             assert "semicolon-separated" in out, out
             return "sniffed a semicolon delimiter"
         check("read_csv sniffs the delimiter", semicolon_sniffed)
 
         def header_only():
-            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/headeronly.csv"})
+            out = registry.dispatch("read_csv", {"path": f"{_sb}/headeronly.csv"})
             assert "0 data rows" in out and "3 columns" in out, out
             assert "No data rows to preview" in out, out
             return "header-only file has 0 data rows"
         check("read_csv header-only file", header_only)
 
         def empty_file():
-            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/empty.csv"})
+            out = registry.dispatch("read_csv", {"path": f"{_sb}/empty.csv"})
             assert "empty" in out, out
             return "empty file is a friendly message"
         check("read_csv empty file", empty_file)
 
         def refuses_excel_and_binary():
-            xl = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/book.xlsx"})
+            xl = registry.dispatch("read_csv", {"path": f"{_sb}/book.xlsx"})
             assert "Excel" in xl and "read_excel" in xl, xl
-            nul = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/blob.csv"})
+            nul = registry.dispatch("read_csv", {"path": f"{_sb}/blob.csv"})
             assert "doesn't look like a text data file" in nul, nul
             return "Excel steered + NUL-byte file refused"
         check("read_csv refuses non-text files", refuses_excel_and_binary)
@@ -3809,16 +3845,16 @@ def t_spreadsheet():
         check("read_csv containment guard", containment_guard)
 
         def folder_and_missing():
-            fol = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke"})
+            fol = registry.dispatch("read_csv", {"path": f"{_sb}"})
             assert "is a folder" in fol, fol
-            miss = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/ghost.csv"})
+            miss = registry.dispatch("read_csv", {"path": f"{_sb}/ghost.csv"})
             assert "can't find" in miss, miss
             return "folder source + missing file are friendly messages"
         check("read_csv folder + missing", folder_and_missing)
 
         def row_scan_cap():
             sp.MAX_ROWS = 2                    # header + 1 data row, then stop
-            out = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/many.csv"})
+            out = registry.dispatch("read_csv", {"path": f"{_sb}/many.csv"})
             sp.MAX_ROWS = saved_rows
             assert "stopped early" in out, out
             return "a huge sheet stops early with a note"
@@ -3826,7 +3862,7 @@ def t_spreadsheet():
 
         def output_is_ascii():
             registry.dispatch(
-                "read_csv", {"path": "jarvis_csv_smoke/accent.csv"}).encode("ascii")
+                "read_csv", {"path": f"{_sb}/accent.csv"}).encode("ascii")
             return "output stayed pure ASCII"
         check("read_csv ascii-only output", output_is_ascii)
 
@@ -3841,13 +3877,13 @@ def t_spreadsheet():
             registry.dispatch("read_csv", {"path": None})
             # a wrong-type rows arg must not raise (falls back to default)
             out = registry.dispatch(
-                "read_csv", {"path": "jarvis_csv_smoke/sales.csv", "rows": "junk"})
+                "read_csv", {"path": f"{_sb}/sales.csv", "rows": "junk"})
             assert "3 data rows" in out, out
             registry.dispatch(
-                "read_csv", {"path": "jarvis_csv_smoke/sales.csv", "rows": {}})
+                "read_csv", {"path": f"{_sb}/sales.csv", "rows": {}})
             # an unexpected extra arg is dropped, the call still succeeds; alt name
             out2 = registry.dispatch(
-                "read_csv", {"file": "jarvis_csv_smoke/sales.csv", "reason": "curious"})
+                "read_csv", {"file": f"{_sb}/sales.csv", "reason": "curious"})
             assert "3 data rows" in out2, out2
             return "guards held"
         check("read_csv hallucination guards", hallucination_guards)
@@ -3868,7 +3904,8 @@ def t_jsondata():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_json_smoke"
+    _sb = "jarvis_json_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
@@ -3896,7 +3933,7 @@ def t_jsondata():
     saved_jsonl = jd.MAX_JSONL_ROWS
     try:
         def happy_object():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/config.json"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/config.json"})
             assert "config.json" in out, out
             assert "object with 4 fields" in out, out
             assert "name (text)" in out and "version (number)" in out, out
@@ -3906,7 +3943,7 @@ def t_jsondata():
         check("read_json summarises an object", happy_object)
 
         def happy_array():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/people.json"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/people.json"})
             assert "array of 3 items" in out, out
             assert "items are objects" in out, out
             assert "id (number)" in out and "name (text)" in out, out
@@ -3914,45 +3951,45 @@ def t_jsondata():
         check("read_json summarises an array of objects", happy_array)
 
         def scalar_array():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/nums.json"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/nums.json"})
             assert "array of 7 items" in out, out
             assert "first item is a number" in out, out
             return "array of scalars reports the item type"
         check("read_json array of scalars", scalar_array)
 
         def top_scalar():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/scalar.json"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/scalar.json"})
             assert "single text value" in out and "just a string" in out, out
             return "top-level scalar summarised"
         check("read_json top-level scalar", top_scalar)
 
         def jsonl_file():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/log.jsonl"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/log.jsonl"})
             assert "JSON Lines with 3 records" in out, out    # blank line ignored
             assert "evt (text)" in out and "n (number)" in out, out
             return "read a .jsonl file (blank line skipped)"
         check("read_json reads JSON Lines", jsonl_file)
 
         def jsonl_without_ext():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/sneaky.json"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/sneaky.json"})
             assert "JSON Lines with 3 records" in out, out    # .json but line-delimited
             return "line-delimited JSON detected without the extension"
         check("read_json JSONL fallback", jsonl_without_ext)
 
         def empty_file():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/empty.json"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/empty.json"})
             assert "empty" in out, out
             return "empty file is a friendly message"
         check("read_json empty file", empty_file)
 
         def broken_json():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/broken.json"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/broken.json"})
             assert "isn't valid JSON" in out, out
             return "invalid JSON is a friendly message"
         check("read_json invalid JSON", broken_json)
 
         def deep_json():
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/deep.json"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/deep.json"})
             # either the parser refuses the deep nest or it summarises -- never raises
             assert isinstance(out, str) and out, out
             out.encode("ascii")
@@ -3960,9 +3997,9 @@ def t_jsondata():
         check("read_json deep-nesting guard", deep_json)
 
         def refuses_binary():
-            png = registry.dispatch("read_json", {"path": "jarvis_json_smoke/pic.png"})
+            png = registry.dispatch("read_json", {"path": f"{_sb}/pic.png"})
             assert "isn't a JSON text file" in png, png
-            nul = registry.dispatch("read_json", {"path": "jarvis_json_smoke/blob.json"})
+            nul = registry.dispatch("read_json", {"path": f"{_sb}/blob.json"})
             assert "doesn't look like a text file" in nul, nul
             return "binary ext steered + NUL-byte file refused"
         check("read_json refuses non-text files", refuses_binary)
@@ -3974,16 +4011,16 @@ def t_jsondata():
         check("read_json containment guard", containment_guard)
 
         def folder_and_missing():
-            fol = registry.dispatch("read_json", {"path": "jarvis_json_smoke"})
+            fol = registry.dispatch("read_json", {"path": f"{_sb}"})
             assert "is a folder" in fol, fol
-            miss = registry.dispatch("read_json", {"path": "jarvis_json_smoke/ghost.json"})
+            miss = registry.dispatch("read_json", {"path": f"{_sb}/ghost.json"})
             assert "can't find" in miss, miss
             return "folder source + missing file are friendly messages"
         check("read_json folder + missing", folder_and_missing)
 
         def jsonl_scan_cap():
             jd.MAX_JSONL_ROWS = 2
-            out = registry.dispatch("read_json", {"path": "jarvis_json_smoke/log.jsonl"})
+            out = registry.dispatch("read_json", {"path": f"{_sb}/log.jsonl"})
             jd.MAX_JSONL_ROWS = saved_jsonl
             assert "stopped early" in out, out
             return "a huge JSONL file stops early with a note"
@@ -3991,7 +4028,7 @@ def t_jsondata():
 
         def output_is_ascii():
             registry.dispatch(
-                "read_json", {"path": "jarvis_json_smoke/accent.json"}).encode("ascii")
+                "read_json", {"path": f"{_sb}/accent.json"}).encode("ascii")
             return "output stayed pure ASCII"
         check("read_json ascii-only output", output_is_ascii)
 
@@ -4006,7 +4043,7 @@ def t_jsondata():
             registry.dispatch("read_json", {"path": None})
             # an unexpected extra arg is dropped, the call still succeeds; alt name
             out = registry.dispatch(
-                "read_json", {"file": "jarvis_json_smoke/config.json", "reason": "curious"})
+                "read_json", {"file": f"{_sb}/config.json", "reason": "curious"})
             assert "object with 4 fields" in out, out
             return "guards held"
         check("read_json hallucination guards", hallucination_guards)
@@ -4015,16 +4052,16 @@ def t_jsondata():
         def gjv_scalar():
             out = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/config.json", "key": "models.chat"})
+                {"path": f"{_sb}/config.json", "key": "models.chat"})
             assert "qwen3:8b (text)" in out, out
             assert "models.chat" in out, out
             b = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/config.json", "key": "enabled"})
+                {"path": f"{_sb}/config.json", "key": "enabled"})
             assert "true (true/false)" in b, b
             v = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/config.json", "key": "version"})
+                {"path": f"{_sb}/config.json", "key": "version"})
             assert "2 (number)" in v, v
             return "dotted path into an object returns the exact scalar"
         check("get_json_value dotted scalar", gjv_scalar)
@@ -4033,15 +4070,15 @@ def t_jsondata():
             # numbers pick a list position, both dot AND [n] bracket syntax
             out = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/people.json", "key": "1.name"})
+                {"path": f"{_sb}/people.json", "key": "1.name"})
             assert "Bob (text)" in out, out
             out2 = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/people.json", "key": "[0].id"})
+                {"path": f"{_sb}/people.json", "key": "[0].id"})
             assert "1 (number)" in out2, out2
             num = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/nums.json", "key": "3"})
+                {"path": f"{_sb}/nums.json", "key": "3"})
             assert "4 (number)" in num, num     # nums = [1,2,3,4,...], index 3 -> 4
             return "list positions work via dot and [n] syntax"
         check("get_json_value list index", gjv_list_index)
@@ -4050,7 +4087,7 @@ def t_jsondata():
             # a key path landing on an object/list is described + previewed
             obj = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/config.json", "key": "models"})
+                {"path": f"{_sb}/config.json", "key": "models"})
             assert "an object with 1 field" in obj, obj
             assert "chat (text)" in obj and "qwen3:8b" in obj, obj
             return "a value that is an object is described + previewed"
@@ -4059,16 +4096,16 @@ def t_jsondata():
         def gjv_missing_key():
             out = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/config.json", "key": "models.brain"})
+                {"path": f"{_sb}/config.json", "key": "models.brain"})
             assert "no 'brain' here" in out, out
             assert "Available fields" in out and "chat" in out, out  # helps self-correct
             oor = registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/people.json", "key": "9.name"})
+                {"path": f"{_sb}/people.json", "key": "9.name"})
             assert "out of range" in oor, oor
             scal = registry.dispatch(          # can't go deeper than a scalar
                 "get_json_value",
-                {"path": "jarvis_json_smoke/config.json", "key": "version.x"})
+                {"path": f"{_sb}/config.json", "key": "version.x"})
             assert "can't go any deeper" in scal, scal
             return "missing key / out-of-range / too-deep are friendly messages"
         check("get_json_value miss guards", gjv_missing_key)
@@ -4077,7 +4114,7 @@ def t_jsondata():
             # accented value forced to ASCII
             registry.dispatch(
                 "get_json_value",
-                {"path": "jarvis_json_smoke/accent.json", "key": "city"}).encode("ascii")
+                {"path": f"{_sb}/accent.json", "key": "city"}).encode("ascii")
             # same home containment as read_json
             r = registry.dispatch(
                 "get_json_value", {"path": "C:\\Windows\\win.ini", "key": "a"})
@@ -4088,9 +4125,9 @@ def t_jsondata():
         def gjv_guards():
             # missing key rejected
             assert "which field" in registry.dispatch(
-                "get_json_value", {"path": "jarvis_json_smoke/config.json"})
+                "get_json_value", {"path": f"{_sb}/config.json"})
             assert "which field" in registry.dispatch(
-                "get_json_value", {"path": "jarvis_json_smoke/config.json", "key": ""})
+                "get_json_value", {"path": f"{_sb}/config.json", "key": ""})
             # missing file still reported (loader shared with read_json)
             assert "tell me which JSON file" in registry.dispatch(
                 "get_json_value", {"key": "a.b"})
@@ -4101,7 +4138,7 @@ def t_jsondata():
             # alt arg names + a stray extra arg: still works
             out = registry.dispatch(
                 "get_json_value",
-                {"file": "jarvis_json_smoke/config.json", "field": "models.chat",
+                {"file": f"{_sb}/config.json", "field": "models.chat",
                  "reason": "curious"})
             assert "qwen3:8b (text)" in out, out
             return "guards held"
@@ -4124,12 +4161,13 @@ def t_convertdata():
     from jarvis.tools import registry
 
     home = pathlib.Path(os.path.expanduser("~"))
-    sandbox = home / "jarvis_convert_smoke"
+    _sb = "jarvis_convert_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
 
     def rel(name):
-        return f"jarvis_convert_smoke/{name}"
+        return f"{_sb}/{name}"
 
     # a CSV with a header, two data rows, and a blank trailing row (must NOT count)
     (sandbox / "data.csv").write_text(
@@ -4264,7 +4302,7 @@ def t_convertdata():
         check("convert_data containment guard", containment_guard)
 
         def folder_and_missing():
-            r = registry.dispatch("convert_data", {"source": "jarvis_convert_smoke"})
+            r = registry.dispatch("convert_data", {"source": f"{_sb}"})
             assert "is a folder" in r, r
             r2 = registry.dispatch("convert_data", {"source": rel("nope.csv")})
             assert "can't find" in r2, r2
