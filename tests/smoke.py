@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
-dates, convert, textstats, numstats, password, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+dates, convert, textstats, numstats, password, textcodec, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
 """
@@ -27,7 +27,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, numstats, organize, password, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textextract, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, numstats, organize, password, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textcodec, textextract, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -4591,6 +4591,101 @@ def t_password():
     check("password hallucination guards", hallucination_guards)
 
 
+def t_textcodec():
+    """Exercises encode_text (Base64 / hex / URL, both directions) + its
+    defenses against 8B hallucinations. Deterministic against known vectors;
+    the tool touches no filesystem, so nothing can collide and no sandbox is
+    needed; needs no model and lives in the safe set."""
+    import base64 as _b64
+    from jarvis.tools import textcodec as tc  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    def _d(op, text, **kw):
+        args = {"operation": op, "text": text}
+        args.update(kw)
+        out = registry.dispatch("encode_text", args)
+        out.encode("ascii")   # every reply is pure ASCII
+        return out
+
+    def round_trips():
+        # Base64 encode matches the stdlib exactly, and decodes back
+        enc = _d("base64_encode", "hello world")
+        assert enc == _b64.b64encode(b"hello world").decode(), enc
+        assert _d("base64_decode", enc) == "hello world", enc
+        assert _d("base64_decode", "aGVsbG8=") == "hello", "known vector"
+        # hex both ways
+        assert _d("hex_encode", "hello") == "68656c6c6f"
+        assert _d("hex_decode", "68656c6c6f") == "hello"
+        # URL both ways
+        assert _d("url_encode", "a b&c=d") == "a%20b%26c%3Dd"
+        assert _d("url_decode", "hello%20world%21") == "hello world!"
+        return "base64/hex/url round-trip + known vectors"
+    check("textcodec round trips", round_trips)
+
+    def forgiving_phrasing():
+        # plain-language operation phrases resolve to the right op
+        assert _d("decode base64", "aGVsbG8=") == "hello"
+        assert _d("to base64", "hi") == _b64.b64encode(b"hi").decode()
+        assert _d("to hex", "hi") == "6869"
+        assert _d("decode hex", "6869") == "hi"
+        assert _d("url decode", "a%20b") == "a b"
+        # format + direction split into separate fields
+        out = registry.dispatch("encode_text",
+            {"format": "base64", "direction": "decode", "text": "aGVsbG8="})
+        assert out == "hello", out
+        # forgiving base64: URL-safe alphabet + missing padding still decode
+        assert _d("base64_decode", "aGVsbG8") == "hello", "repairs padding"
+        # forgiving hex: 0x prefix + colon separators tolerated
+        assert _d("hex_decode", "0x68:69") == "hi", "strips 0x/sep"
+        # alt text field name
+        assert registry.dispatch("encode_text",
+            {"operation": "hex_encode", "content": "hi"}) == "6869"
+        return "plain phrasing + split fields + forgiving inputs"
+    check("textcodec forgiving phrasing", forgiving_phrasing)
+
+    def ascii_and_binary():
+        # decoding real UTF-8 (curly quote / accent) yields readable ASCII
+        blob = _b64.b64encode("café — “hi”".encode()).decode()
+        out = _d("base64_decode", blob)
+        out.encode("ascii")
+        assert "cafe" in out and '"hi"' in out, out
+        # decoding binary bytes doesn't crash and is flagged, still pure ASCII
+        binblob = _b64.b64encode(bytes(range(0, 32))).decode()
+        out = _d("base64_decode", binblob)
+        out.encode("ascii")
+        assert "binary" in out.lower(), out
+        return "utf8 -> ascii; binary flagged, never non-ascii"
+    check("textcodec ascii + binary", ascii_and_binary)
+
+    def guards():
+        # invalid base64 / hex -> friendly message, never raises
+        for op, bad in (("base64_decode", "!!!not base64!!!"),
+                        ("hex_decode", "zzz")):
+            out = _d(op, bad)
+            assert "Sorry sir" in out, (op, out)
+        # unknown / bare operation -> lists the choices
+        assert "base64_encode" in _d("frobnicate", "hi")
+        assert "base64_encode" in _d("decode", "hi")   # which format?
+        # empty / whitespace / missing text -> friendly, no crash
+        for t in ("", "   ", None):
+            out = registry.dispatch("encode_text",
+                {"operation": "base64_encode", "text": t})
+            assert "no text" in out.lower(), (t, out)
+        # wrong-type text is coerced (number -> its string form), never raises
+        out = registry.dispatch("encode_text",
+            {"operation": "hex_encode", "text": 123})
+        assert out == "313233", out                    # str(123) hex-encoded
+        # over-long input refused, not silently truncated
+        out = _d("base64_encode", "A" * (tc.MAX_TEXT + 1))
+        assert "too large" in out.lower(), out
+        # a stray extra arg is dropped by dispatch; the call still succeeds
+        out = registry.dispatch("encode_text",
+            {"operation": "hex_encode", "text": "hi", "reason": "curious"})
+        assert out == "6869", out
+        return "invalid/unknown/empty/oversized/wrong-type all handled"
+    check("textcodec hallucination guards", guards)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
@@ -4604,6 +4699,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert, "textstats": t_textstats,
             "numstats": t_numstats, "password": t_password,
+            "textcodec": t_textcodec,
             "textextract": t_textextract,
             "spreadsheet": t_spreadsheet, "jsondata": t_jsondata,
             "convertdata": t_convertdata,
@@ -4624,7 +4720,7 @@ if __name__ == "__main__":
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()
-        t_numstats(); t_password()
+        t_numstats(); t_password(); t_textcodec()
         t_textextract()
         t_spreadsheet(); t_jsondata(); t_convertdata()
         t_reminders(); t_dispatch()

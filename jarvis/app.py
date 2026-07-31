@@ -62,6 +62,7 @@ def main():
     from .tools import shell  # noqa: F401
     from .tools import spreadsheet  # noqa: F401
     from .tools import tasks as task_list  # noqa: F401
+    from .tools import textcodec  # noqa: F401
     from .tools import textstats  # noqa: F401
     from .tools import textextract  # noqa: F401
     from .tools import registry
@@ -140,6 +141,7 @@ def main():
     print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
           "average 4, 8, 15, 16, 23, 42 / "
           "generate a strong password / "
+          "decode this base64 aGVsbG8gd29ybGQ= / "
           "convert 5 miles to km / remind me in 10 minutes to stretch / "
           "how many days until christmas / add milk to my to-do list / "
           "how many words is my essay.txt / "

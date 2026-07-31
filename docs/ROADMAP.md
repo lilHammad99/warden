@@ -1316,6 +1316,51 @@
       tool touches no filesystem, so there is nothing to collide on (no sandbox
       needed). Full safe set: 331 checks, all PASS. No new dependency
 
+### Phase 43 — Encode / decode text (Base64 / hex / URL) (2026-07-31)
+- [x] `encode_text` tool (`jarvis/tools/textcodec.py`): a text/data-TRANSFORMATION
+      win, on-brand for a "local - private - yours" assistant. Decoding a Base64
+      blob, a hex string, or a percent-encoded URL is an everyday chore (a pasted
+      token, a value out of a log, a link with %20 in it) and people usually paste
+      it into some website that SEES (and may log) whatever they hand it. The 8B
+      model itself is hopeless at these encodings (it invents/drops characters), so
+      Jarvis now does it EXACTLY, on-device ("decode this base64 aGVsbG8=", "base64
+      encode this", "convert this to hex", "url decode hello%20world"). Pairs with
+      get_clipboard/set_clipboard ("decode my clipboard", then "copy that")
+- [x] Pure standard library (`base64`/`binascii`/`urllib.parse`), NO new
+      dependency. Six operations: base64_encode, base64_decode, hex_encode,
+      hex_decode, url_encode, url_decode. Plain phrasing ("decode base64", "to
+      hex", "url decode") is resolved via a forgiving alias map, and a `format` +
+      `direction` pair split across two fields is reassembled
+- [x] Robust decoders: Base64 tolerates whitespace, the URL-safe alphabet, and
+      repairs missing `=` padding; hex tolerates a `0x` prefix and `:`/`,`/`;`
+      separators. Invalid Base64/hex is REFUSED with a friendly message, never a
+      raw exception
+- [x] Bounded: input length-capped (`MAX_TEXT`, 200k chars) and an over-long input
+      is REFUSED rather than silently truncated (a truncated Base64/hex string
+      would decode to corrupt bytes -- better to say no than mislead)
+- [x] Pure ASCII out: encoded output is ASCII by construction; DECODED output is
+      forced to readable pure ASCII (reuses `document._ascii_body`: curly quotes/
+      accents transliterated, other bytes dropped), and a decode that yields mostly
+      binary is flagged as such -- a decoded image/file blob can never corrupt the
+      console/context
+- [x] Hardened vs 8B hallucinations: empty/whitespace/missing text -> friendly
+      message; wrong-type text coerced (`str(123)`); alt text fields (`content`/
+      `string`/`data`/`input`/`value`/...); a bare "encode"/"decode" or an unknown
+      operation lists the six choices so the model self-corrects. Never raises,
+      read-only, nothing persisted
+- [x] Auto-registers via a new `textcodec` import in `app.py`; the agent system
+      prompt steers "encode/decode base64/hex/url" to `encode_text` (exact, local,
+      offer to copy the result); the console "Try:" line suggests "decode this
+      base64 aGVsbG8gd29ybGQ="
+- [x] `tests/smoke.py textcodec` (in the safe set) covers Base64/hex/URL
+      round-trips + known vectors (Base64 encode matches the stdlib exactly), plain
+      phrasing + split `format`/`direction` fields + forgiving inputs (URL-safe
+      alphabet, missing padding, `0x`/separators), UTF-8 -> ASCII on decode, a
+      binary blob flagged + still ASCII, invalid Base64/hex refused, unknown/bare
+      operation listing the choices, empty/whitespace/missing/wrong-type/oversized/
+      extra-arg guards. The tool touches no filesystem (no sandbox needed). Full
+      safe set: 335 checks, all PASS. No new dependency
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1444,6 +1489,13 @@
       classes/count with avoid-ambiguous look-alikes, guarantees one of each
       enabled class, bounded (length 4-128, count <=20), all-classes-off falls
       back to a strong default, ASCII-only; pairs with set_clipboard ("copy that")
+- [x] Text/data transformation: encode / decode text with Base64, hexadecimal, or
+      URL (percent) encoding -- done in Phase 43 (`encode_text`); pure stdlib
+      (`base64`/`binascii`/`urllib.parse`, no dep), six operations both ways with
+      forgiving phrasing, robust decoders (URL-safe/padding-repair Base64, `0x`/
+      separator-tolerant hex), on-device (nothing sent anywhere), bounded (200k-char
+      input, refused not truncated), pure ASCII out (decoded binary flagged), pairs
+      with get_clipboard/set_clipboard
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

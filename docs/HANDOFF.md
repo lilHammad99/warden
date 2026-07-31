@@ -902,12 +902,47 @@ puts it on the clipboard. NO new dependency (pure stdlib `secrets`).
   (random output) not fixed strings. Full safe set: 331 checks, all PASS. No new
   dependency.
 
+## 2026-07-31 — Encode / decode text (Base64 / hex / URL) (Phase 43)
+
+Added `encode_text` (`jarvis/tools/textcodec.py`): a text/data-TRANSFORMATION win
+in the same on-brand vein as generate_password. Decoding a Base64 blob, a hex
+string or a percent-encoded URL is an everyday chore (a pasted token, a value out
+of a log, a link with %20 in it), and the usual answer is a website that SEES (and
+may log) whatever you hand it. The 8B model itself invents/drops characters on
+these encodings, so Jarvis now does it EXACTLY, on-device ("decode this base64
+aGVsbG8=", "base64 encode this", "convert this to hex", "url decode
+hello%20world"). Pairs with get_clipboard/set_clipboard. NO new dependency (pure
+stdlib `base64`/`binascii`/`urllib.parse`).
+- Six operations: base64_encode/decode, hex_encode/decode, url_encode/decode.
+  Args `operation` + `text`. Plain phrasing ("decode base64", "to hex") resolves
+  via a forgiving alias map; a `format`+`direction` pair split across two fields is
+  reassembled. Robust decoders: Base64 tolerates whitespace/URL-safe alphabet +
+  repairs `=` padding; hex tolerates a `0x` prefix and `:`/`,`/`;` separators.
+- Bounded: input capped (`MAX_TEXT`, 200k chars) and REFUSED (not truncated) if
+  over -- a truncated Base64/hex string would decode to corrupt bytes. Pure ASCII
+  out: encoded output is ASCII by construction; decoded output is forced to
+  readable ASCII (reuses `document._ascii_body`), and a mostly-binary decode is
+  flagged so a decoded image/file blob can't corrupt the console/context.
+- Hardened: empty/whitespace/missing text -> friendly message; wrong-type text
+  coerced (`str(123)`); alt text fields (`content`/`string`/`data`/`input`/...);
+  invalid Base64/hex refused; a bare "encode"/"decode" or unknown operation lists
+  the six choices. Read-only, nothing persisted, never raises.
+- Wired into `app.py` imports (`from .tools import textcodec`) + the console "Try:"
+  line ("decode this base64 aGVsbG8gd29ybGQ="), and the agent system prompt
+  (encode_text after the extract_items bullet, offer to copy the result).
+- `tests/smoke.py textcodec` (safe set; no filesystem, so no sandbox needed):
+  Base64/hex/URL round-trips + known vectors (Base64 encode matches the stdlib),
+  plain phrasing + split fields + forgiving inputs, UTF-8 -> ASCII on decode, a
+  binary blob flagged + still ASCII, invalid Base64/hex refused, unknown/bare
+  operation listing the choices, and the empty/whitespace/missing/wrong-type/
+  oversized/extra-arg guards. Full safe set: 335 checks, all PASS. No new dep.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 42 that is 67 without browser, 73 with (generate_password added one).
+after Phase 43 that is 68 without browser, 74 with (encode_text added one).
 No tools are being silently dropped.
 
 ## How to test (in order)

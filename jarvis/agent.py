@@ -70,6 +70,14 @@ Rules:
   e.g. from get_clipboard) or path (a plain-text/.docx/.odt file; find it with
   find_files first). It finds them exactly and de-duplicates them; your own
   extraction misses items or invents them.
+- Encoding / decoding text: when the user wants to encode or decode a string with
+  Base64, hexadecimal, or URL (percent) encoding ("decode this base64", "base64
+  encode this", "convert this to hex", "url decode hello%20world"), call
+  encode_text with operation (base64_encode, base64_decode, hex_encode,
+  hex_decode, url_encode, or url_decode) and text (the string, e.g. from
+  get_clipboard). It is exact and runs entirely on this PC; never work the
+  encoding out yourself -- your own guess is wrong. Offer to copy the result to
+  the clipboard (set_clipboard).
 - Spreadsheets / data files: for ANY question about a CSV or TSV data file --
   how many rows or columns it has, what its columns are, or to preview or
   summarise it ("how many rows are in my sales data", "what columns are in this
