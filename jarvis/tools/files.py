@@ -29,12 +29,15 @@ def _resolve(path: str) -> Path:
 )
 def write_file(path: str, content: str) -> str:
     p = _resolve(path)
-    if p.suffix.lower() == ".pdf":
-        # writing text into a .pdf makes a file no viewer can open; send the
-        # model to the tool that writes a real PDF instead
-        return ("Error: I can't make a real PDF with write_file, sir -- that "
-                "would create a file that won't open. Use create_pdf for a "
-                "PDF (a CV, letter, or report).")
+    suffix = p.suffix.lower()
+    if suffix in (".pdf", ".docx"):
+        # writing raw text into a .pdf/.docx makes a file no viewer can open;
+        # send the model to the tool that writes a real one instead
+        realtool = "create_pdf" if suffix == ".pdf" else "create_docx"
+        kind = "PDF" if suffix == ".pdf" else "Word document"
+        return (f"Error: I can't make a real {kind} with write_file, sir -- that "
+                f"would create a file that won't open. Use {realtool} for a "
+                f"{kind} (a CV, letter, or report).")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return f"Wrote {len(content)} characters to {p}"

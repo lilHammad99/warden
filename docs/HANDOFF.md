@@ -1028,6 +1028,37 @@ talk aloud. Both root-caused and fixed.
 
 Also fixed this session: `set_volume` for pycaw 20251023 (see the earlier commit).
 
+## 2026-07-31 — Weather that works, a Word writer, a resourcefulness nudge
+
+the user: "what's the weather like today" made Jarvis web_search and then say it
+couldn't find it; also asked for a .docx writer and to make Jarvis "more like
+you".
+
+- **get_weather** (`jarvis/tools/weather.py`): web_search only returns page
+  DESCRIPTIONS ("get accurate forecasts..."), never the actual temperature, so
+  the model had nothing to report. New tool pulls real current conditions +
+  today's hi/lo/rain from wttr.in (free, no API key; geolocates this PC by IP
+  when no city is given). Output is pure ASCII (wttr's emoji/arrows stripped).
+  KEY guard: `_clean_location` drops filler/question words a small model dumps
+  into `location` ("today", "whats the weather like now" -> "" -> IP geolocation;
+  "weather in London" -> "London"). Without it the model passed "today" and
+  wttr resolved it to a random city (saw "Silhaam, Indonesia"). System prompt +
+  routing send weather to get_weather, not web_search.
+- **create_docx** (`jarvis/tools/makedocx.py`): the Word-doc twin of create_pdf
+  (Phase from earlier today), via python-docx (added to requirements.txt). Same
+  home-containment + never-raise safety. write_file now refuses BOTH .pdf and
+  .docx and steers to create_pdf / create_docx; the system prompt routes "as a
+  word doc" here. .docx keeps real unicode (unlike PDF's Latin-1 core fonts).
+- **Resourcefulness nudge** (system prompt): added a rule to be helpful and try
+  another approach before giving up, only claim it can't AFTER trying, lead with
+  the answer, and never invent a fact/claim a tool result it didn't get. This is
+  the "more like you" ask, scoped to a behavior change rather than a model swap
+  (an 8B local model can't be made Opus-smart, but it can stop giving up early).
+
+71 tools without browser, 77 with. Verified end-to-end in the real app: weather
+reports the correct local city; create_docx/create_pdf produce openable files
+(pypdf / python-docx read them back). NOTE: no create_xlsx writer yet.
+
 ## How to test (in order)
 
 ```

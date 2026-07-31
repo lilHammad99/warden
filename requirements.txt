@@ -16,4 +16,5 @@ ultralytics
 playwright
 pypdf
 fpdf2
+python-docx
 openpyxl

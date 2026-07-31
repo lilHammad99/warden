@@ -50,8 +50,10 @@ def main():
     from .tools import fileinfo  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import jsondata  # noqa: F401
+    from .tools import makedocx  # noqa: F401
     from .tools import makepdf  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
+    from .tools import weather  # noqa: F401
     from .tools import numstats  # noqa: F401
     from .tools import organize  # noqa: F401
     from .tools import password  # noqa: F401
