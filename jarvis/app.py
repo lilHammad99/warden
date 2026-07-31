@@ -51,6 +51,7 @@ def main():
     from .tools import find  # noqa: F401
     from .tools import jsondata  # noqa: F401
     from .tools import memory as memory_store  # noqa: F401
+    from .tools import numstats  # noqa: F401
     from .tools import organize  # noqa: F401
     from .tools import pdf  # noqa: F401
     from .tools import recent  # noqa: F401
@@ -136,6 +137,7 @@ def main():
         print(f"Reminder: you have {n_todo} thing{'s' if n_todo != 1 else ''} "
               "on your to-do list. Say 'what's on my list' to hear it.")
     print("Type your command ('exit' to quit). Try: what is 15% of 240 / "
+          "average 4, 8, 15, 16, 23, 42 / "
           "convert 5 miles to km / remind me in 10 minutes to stretch / "
           "how many days until christmas / add milk to my to-do list / "
           "how many words is my essay.txt / "

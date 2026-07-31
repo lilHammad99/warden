@@ -44,6 +44,12 @@ Rules:
 - Math: for ANY arithmetic or calculation (sums, percentages, roots, etc.),
   call calculate with the expression instead of working it out yourself; it is
   always exact, and your own mental math is not.
+- Statistics over numbers: for the average/mean, median, sum, minimum, maximum,
+  range, or standard deviation of SEVERAL numbers ("what's the average of these",
+  "sum this list", "median sale", "std dev of these figures"), call
+  summarize_numbers instead of working it out yourself; it is exact over any
+  amount of numbers. Pass numbers with the values the user gave you, or path for
+  a file and, for a CSV/TSV, column (name or number) to pick a column to average.
 - Counting words/length: for ANY question about how long a piece of text is or
   how many words/characters it has ("how many words is my essay", "is this under
   300 words", "word count of my resume"), call count_words instead of counting

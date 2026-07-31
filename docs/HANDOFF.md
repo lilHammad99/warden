@@ -822,13 +822,61 @@ read_document. No new dependency (pure stdlib `re`).
   sandbox is **pid-tagged** so concurrent smoke runs never collide. Full safe set:
   318 checks, all PASS. No new dependency.
 
+## 2026-07-31 — Smoke test isolation retrofit (separate commit)
+
+Older smoke fixtures used FIXED sandbox dir/file names (find_duplicates was the
+known one; also find/search/recent/organize/.../json/convertdata, plus the temp
+memory/tasks/reminders stores). Two overlapping smoke runs (queued loop cycles)
+collided on those names and caused transient false failures. Retrofit (assertions
+UNCHANGED, only paths):
+- 22 home-rooted fixtures: `sandbox = home / f"<base>_{pid}_{uuid4().hex}"`; a
+  `_sb` var carries the unique name and every tool-arg path references it. Cleanup
+  was already in a `finally` (rmtree sandbox).
+- memory/tasks/reminders: unique `tempfile.mkdtemp()` store DIR per run (also
+  isolates the fixed-name `*.corrupt.json` sidecar), removed at end of the fixture
+  (check() swallows assertion errors, so control always reaches the cleanup).
+- t_tools temp file: pid/uuid-tagged and removed after use.
+Done via a scoped transform (each fixed base name is function-unique). Committed
+separately from Phase 41.
+
+## 2026-07-31 — Summarise a set of numbers (Phase 41)
+
+Added `summarize_numbers` (`jarvis/tools/numstats.py`): the exact-statistics
+member of the exact-computation family (after calculate / convert_units /
+count_words). The 8B model is bad at arithmetic over MANY numbers, so this reports
+the count, sum, average, min, max, median, range and standard deviation EXACTLY
+("what's the average of these", "sum this list", "median sale", "std dev of these
+figures"). Pairs with read_csv (average a column). NO new dependency (pure stdlib
+`statistics`/`csv`/`re`/`math`).
+- Input: `numbers` (a string OR a list; any separators) OR `path` to a file --
+  a plain list/text file (all numbers extracted) or a CSV/TSV with `column` (name
+  OR 1-based number) to summarise one column. Extractor handles negatives,
+  decimals, thousands separators (1,234,567) and scientific notation (6.02e23);
+  non-numeric text ignored. A filename dropped into `numbers` is read as a file
+  (reuses textstats `_looks_like_path`).
+- Reuses `organize._resolve_under_home` (containment: outside home / `..`-escape
+  REJECTED), `textstats._read_file_text` (bounded, binary-sniffed reader) and
+  `spreadsheet._pick_delimiter` (CSV delimiter sniff). Bounded: direct text capped,
+  over-large file refused, at most `MAX_VALUES` (100000) values used (+ note);
+  `math.fsum` for an accurate total; non-finite skipped. Read-only; never raises;
+  pure ASCII out. Alt arg names (`values`/`data`/`list`/`file`/`col`/`field`/...).
+- Wired into `app.py` imports (`from .tools import numstats`) + the console "Try:"
+  line ("average 4, 8, 15, 16, 23, 42"), and the agent system prompt
+  (summarize_numbers for average/median/sum/std dev, after the calculate bullet).
+- `tests/smoke.py numstats` (safe set, pid/uuid-tagged sandbox): exact stats,
+  forgiving input (list/thousands/scientific/negatives/alt names/single value),
+  a text file, filename-in-`numbers`, CSV column by name AND number + missing-
+  column list, the value cap, containment + folder/missing/no-number/binary
+  guards, ASCII-only, and the empty/missing/wrong-type guards. Full safe set:
+  326 checks, all PASS. No new dependency.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 40 that is 65 without browser, 71 with (extract_items added one). No
-tools are being silently dropped.
+after Phase 41 that is 66 without browser, 72 with (summarize_numbers added one).
+No tools are being silently dropped.
 
 ## How to test (in order)
 

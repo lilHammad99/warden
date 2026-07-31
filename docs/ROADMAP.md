@@ -1227,6 +1227,57 @@
       The sandbox is pid-tagged so concurrent smoke runs never collide. Full safe
       set: 318 checks, all PASS. No new dependency
 
+### Phase 41 — Summarise a set of numbers (2026-07-31)
+- [x] `summarize_numbers` tool (`jarvis/tools/numstats.py`): rounds out the
+      exact-computation family (`calculate` for one expression, `convert_units`
+      for conversions, `count_words` for length) with statistics over MANY
+      numbers -- something an 8B local model is genuinely bad at. It computes the
+      count, sum, average (mean), min, max, median, range and standard deviation
+      EXACTLY ("what's the average of these", "sum this list", "median sale",
+      "std dev of these figures"), instead of guessing. Pairs with `read_csv`
+      (locate a sheet, then average a column)
+- [x] Pure standard library (`statistics`, `csv`, `re`, `math`), NO new
+      dependency. Works on EITHER numbers passed directly (a string OR a list;
+      separators don't matter) OR a file: a plain list/text file (all numbers in
+      it), or a CSV/TSV where `column` (its name OR 1-based number) picks the
+      column to summarise. The extractor understands negatives, decimals,
+      thousands separators (`1,234,567`) and scientific notation (`6.02e23`);
+      non-numeric text is ignored, not guessed at
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      file path outside home -- including a `..`-escape -- is REJECTED, so it can
+      never read a file from `C:\Windows`. Read-only
+- [x] Bounded everywhere: directly-passed text capped, an over-large file refused
+      before reading (reuses `count_words`' bounded, binary-sniffed reader), and
+      at most `MAX_VALUES` (100000) values used with a note if there were more --
+      a giant input can't exhaust memory. `math.fsum` for an accurate total;
+      non-finite values skipped
+- [x] Hardened vs 8B hallucinations: empty/missing args rejected, wrong types /
+      list shapes coerced (`numbers` may be a list, a bare number, or text), a
+      filename dropped into `numbers` read as a file, a missing column lists the
+      real columns so the model self-corrects, a binary/PDF/folder/missing file
+      and "no numbers found" all surface as friendly ASCII messages, alt arg
+      names accepted (`values`/`data`/`list`/`file`/`source`/`col`/`field`/...).
+      Output pure ASCII; never raises
+- [x] Auto-registers via a new `numstats` import in `app.py`; the agent system
+      prompt steers "average/median/sum/std dev of these numbers" to
+      `summarize_numbers`; the console "Try:" line suggests "average 4, 8, 15, 16,
+      23, 42"
+- [x] `tests/smoke.py numstats` (in the safe set) covers exact stats over direct
+      numbers, forgiving input (list/thousands/scientific/negatives/alt names/
+      single value), reading a text file, the filename-in-`numbers` detection, a
+      CSV column by name AND number + the missing-column list, the value cap
+      (first N + note, via a temporary cap shrink), the containment guard
+      (`..`-escape) + folder/missing/no-number/binary guards, ASCII-only output,
+      and the empty/missing/wrong-type guards. Uses a pid/uuid-tagged sandbox so
+      concurrent smoke runs never collide. Full safe set: 326 checks, all PASS.
+      No new dependency
+- [x] Test isolation retrofit (same cycle, separate commit): every older
+      smoke-test fixture that used a FIXED sandbox dir/file name (e.g.
+      `jarvis_find_smoke`, `jarvis_dupe_smoke`, and the temp memory/tasks/
+      reminders stores) now uses a unique per-run path (pid + uuid4, or
+      `tempfile.mkdtemp` for the stores) so two overlapping loop-cycle smoke runs
+      no longer collide and cause transient false failures. Assertions unchanged
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1344,6 +1395,11 @@
       (no dep), real pattern matching + de-dup + validation (phone digit-count,
       IP octet range), home-contained, bounded (text/file size, items listed, item
       length), reuses count_words' file reader, ASCII-only; pairs with get_clipboard
+- [x] Productivity / exact computation: summarise a set of numbers (average,
+      median, sum, min, max, range, standard deviation) -- done in Phase 41
+      (`summarize_numbers`); pure stdlib (no dep), works on direct numbers or a
+      file/CSV column, home-contained, bounded (text/file size, 100000 values),
+      understands thousands separators + scientific notation, ASCII-only
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

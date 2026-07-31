@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
-dates, convert, textstats, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+dates, convert, textstats, numstats, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
 """
@@ -27,7 +27,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, organize, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textextract, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, numstats, organize, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textextract, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -4348,6 +4348,123 @@ def t_convertdata():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def t_numstats():
+    """Exercises summarize_numbers + its defenses against 8B hallucinations.
+    Uses a pid/uuid-tagged sandbox inside home so overlapping smoke runs never
+    collide; no model needed, so it lives in the safe set."""
+    import os, pathlib, shutil, uuid
+    from jarvis.tools import numstats as ns  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    _sb = "jarvis_numstats_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+    (sandbox / "scores.txt").write_text("10\n20\n30\n40\n", encoding="utf-8")
+    (sandbox / "sales.csv").write_text(
+        "name,amount,qty\nAli,100,2\nBob,250,5\nCy,50,\n", encoding="utf-8")
+    (sandbox / "nonum.txt").write_text("nothing numeric here", encoding="utf-8")
+    (sandbox / "pic.bin").write_bytes(b"\x00\x01BIN\x00data")
+
+    try:
+        def happy_path():
+            out = registry.dispatch("summarize_numbers",
+                                    {"numbers": "4, 8, 15, 16, 23, 42"})
+            assert "6 values" in out, out
+            assert "Sum 108" in out and "average 18" in out, out
+            assert "median 15.5" in out and "range 38" in out, out
+            assert "min 4" in out and "max 42" in out, out
+            return "exact stats over direct numbers"
+        check("numstats happy path", happy_path)
+
+        def forgiving_input():
+            # a list, thousands separators, scientific notation, negatives, alt name
+            lst = registry.dispatch("summarize_numbers", {"numbers": [1, 2, 3, 4]})
+            assert "average 2.5" in lst, lst
+            mix = registry.dispatch("summarize_numbers",
+                {"numbers": "1,234.50 and 2,000 and -50 and 6.02e2"})
+            assert "4 values" in mix and "Sum 3786.5" in mix, mix
+            alt = registry.dispatch("summarize_numbers", {"values": "10 20 30"})
+            assert "average 20" in alt, alt
+            one = registry.dispatch("summarize_numbers", {"numbers": 42})
+            assert "1 value" in one and "need 2+" in one, one
+            return "lists/thousands/scientific/negatives/alt-names handled"
+        check("numstats forgiving input", forgiving_input)
+
+        def from_text_file():
+            out = registry.dispatch("summarize_numbers", {"path": _sb + "/scores.txt"})
+            assert "4 values" in out and "average 25" in out, out
+            # a filename dropped into 'numbers' is read as a file
+            drop = registry.dispatch("summarize_numbers", {"numbers": _sb + "/scores.txt"})
+            assert "average 25" in drop, drop
+            return "reads numbers from a text file"
+        check("numstats text file", from_text_file)
+
+        def csv_column():
+            byname = registry.dispatch("summarize_numbers",
+                {"path": _sb + "/sales.csv", "column": "amount"})
+            assert "3 values" in byname and "average 133.333" in byname, byname
+            bynum = registry.dispatch("summarize_numbers",
+                {"path": _sb + "/sales.csv", "column": "2"})
+            assert "average 133.333" in bynum, bynum
+            # a missing column lists the real columns so the model can self-correct
+            miss = registry.dispatch("summarize_numbers",
+                {"path": _sb + "/sales.csv", "column": "nope"})
+            assert "can't find a column" in miss and "amount" in miss, miss
+            return "CSV column by name and number, missing-column lists columns"
+        check("numstats csv column", csv_column)
+
+        def value_cap():
+            saved = ns.MAX_VALUES
+            ns.MAX_VALUES = 3
+            try:
+                out = registry.dispatch("summarize_numbers", {"numbers": "1 2 3 4 5 6"})
+                assert "3 values" in out and "first 3 numbers" in out, out
+            finally:
+                ns.MAX_VALUES = saved
+            return "value cap uses first N with a note"
+        check("numstats value cap", value_cap)
+
+        def containment_and_guards():
+            r = registry.dispatch("summarize_numbers",
+                {"path": _sb + "/../../../Windows/win.ini"})
+            assert "only work inside your own folders" in r or "isn't valid" in r, r
+            fol = registry.dispatch("summarize_numbers", {"path": _sb})
+            assert "is a folder" in fol, fol
+            miss = registry.dispatch("summarize_numbers", {"path": _sb + "/ghost.txt"})
+            assert "can't find" in miss, miss
+            nn = registry.dispatch("summarize_numbers", {"path": _sb + "/nonum.txt"})
+            assert "couldn't find any numbers" in nn, nn
+            binf = registry.dispatch("summarize_numbers", {"path": _sb + "/pic.bin"})
+            assert "Error" in binf, binf
+            return "containment + folder/missing/no-number/binary guards held"
+        check("numstats containment + guards", containment_and_guards)
+
+        def ascii_only():
+            registry.dispatch("summarize_numbers", {"numbers": "3 4 5"}).encode("ascii")
+            registry.dispatch("summarize_numbers", {"path": _sb + "/scores.txt"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("numstats ascii-only", ascii_only)
+
+        def hallucination_guards():
+            # wrong types / weird shapes must not raise, just come back as strings
+            for bad in (123, ["1", "2"], {}, None, True):
+                assert isinstance(registry.dispatch("summarize_numbers", {"numbers": bad}), str)
+            assert "Error" in registry.dispatch("summarize_numbers", {"numbers": ""})
+            assert "Error" in registry.dispatch("summarize_numbers", {})       # missing arg
+            assert "couldn't find any numbers" in registry.dispatch(
+                "summarize_numbers", {"numbers": "no digits here"})
+            # a stray extra arg is dropped; the call still succeeds
+            out = registry.dispatch("summarize_numbers",
+                {"numbers": "5 10 15", "reason": "curious"})
+            assert "average 10" in out, out
+            return "guards held"
+        check("numstats hallucination guards", hallucination_guards)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
@@ -4360,6 +4477,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert, "textstats": t_textstats,
+            "numstats": t_numstats,
             "textextract": t_textextract,
             "spreadsheet": t_spreadsheet, "jsondata": t_jsondata,
             "convertdata": t_convertdata,
@@ -4380,6 +4498,7 @@ if __name__ == "__main__":
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()
+        t_numstats()
         t_textextract()
         t_spreadsheet(); t_jsondata(); t_convertdata()
         t_reminders(); t_dispatch()
