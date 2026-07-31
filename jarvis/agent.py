@@ -50,6 +50,14 @@ Rules:
   yourself; it is exact. Pass text for words the user gave you directly, or path
   for a file (a plain-text file, or a Word .docx / OpenDocument .odt document;
   find it with find_files first if you don't have the path).
+- Extracting items from text: when the user wants to COLLECT or LIST every email
+  address, link/URL, phone number, IP address, or number out of a block of text
+  ("get all the email addresses from this", "pull the links out of my clipboard",
+  "find all the phone numbers in this document"), call extract_items with kind
+  (emails, urls, phones, ips, or numbers) and either text (the text they gave you,
+  e.g. from get_clipboard) or path (a plain-text/.docx/.odt file; find it with
+  find_files first). It finds them exactly and de-duplicates them; your own
+  extraction misses items or invents them.
 - Spreadsheets / data files: for ANY question about a CSV or TSV data file --
   how many rows or columns it has, what its columns are, or to preview or
   summarise it ("how many rows are in my sales data", "what columns are in this

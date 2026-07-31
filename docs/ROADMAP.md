@@ -1176,6 +1176,57 @@
       over cap), ASCII-only reply, and the empty/missing/wrong-type guards. Full
       safe set: 300 checks, all PASS
 
+### Phase 40 — Extract items (emails / links / phones / IPs / numbers) (2026-07-31)
+- [x] `extract_items` tool (`jarvis/tools/textextract.py`): a productivity /
+      text-handling win in a category well away from the (now complete)
+      document- and structured-data-reading families. Pulling every email
+      address, link, phone number, IP or number out of a block of text is an
+      everyday chore an 8B local model does badly -- it silently drops some,
+      invents others, or mangles the formatting. Now Jarvis harvests them EXACTLY
+      with real pattern matching, de-duplicates them and lists them ("get all the
+      email addresses from this", "pull the links out of my clipboard", "find all
+      the phone numbers in this document"). Pairs with `get_clipboard` (harvest
+      what the user just copied) and `find_files`/`read_document` (locate a doc,
+      then pull out its contacts/links)
+- [x] Pure standard library (`re`), NO new dependency. Give `kind` (emails, urls,
+      phones, ips, or numbers -- many spellings/aliases mapped) and EITHER `text`
+      (given directly) OR `path` (a plain-text file, or a Word .docx / OpenDocument
+      .odt document, reusing `count_words`/`read_document`'s bounded, binary-sniffed
+      reader -- no duplicated parsing). A filename dropped into the `text` field is
+      detected and read as a file
+- [x] Correct, not naive: URLs have trailing punctuation stripped; phone
+      candidates are validated (7-15 digits AND a real separator/`+`, so a bare
+      digit run is treated as a number not a phone); IP octets are range-checked
+      (`999.1.1.1` rejected); results are de-duplicated (case-insensitively for
+      emails/urls) in first-seen order
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      file path outside home -- including a `..`-escape -- is REJECTED, so it can
+      never read a file from `C:\Windows`
+- [x] Bounded everywhere: directly-passed text capped (searched in part + noted if
+      over), an over-large/binary/PDF file refused before reading, the number of
+      listed items capped (200, with an "and N more" summary), and every item
+      length-bounded + forced to pure single-line ASCII -- a giant or hostile input
+      can't exhaust memory or flood the agent's context. Read-only; never raises
+- [x] Hardened vs 8B hallucinations: an unknown/empty/missing `kind` returns a
+      friendly message listing the supported kinds so the model self-corrects;
+      empty/missing source, wrong-type args, a folder source and a missing file all
+      surface as friendly ASCII messages; alt arg names accepted
+      (`type`/`what`/`content`/`input`/`file`/`document`/...)
+- [x] Auto-registers via a new `textextract` import in `app.py`; the agent system
+      prompt steers "get/pull/list all the emails/links/phone numbers" to
+      `extract_items`; the console "Try:" line suggests "pull the email addresses
+      out of my clipboard"
+- [x] `tests/smoke.py textextract` (in the safe set) covers extracting emails
+      (de-duped), urls (trailing punctuation stripped, alias mapped), phones
+      (validated, bare digit run excluded), ips (out-of-range octets rejected) and
+      numbers (decimals/negatives/commas, de-duped), reading a plain-text file and
+      a real `.docx`, the filename-in-text detection, the no-match + unknown-kind
+      messages, alt arg names, the containment guard (absolute AND `..`-escape),
+      folder + missing + PDF/binary refusals, the over-long-text truncation, the
+      item-count cap, ASCII-only output, and the empty/missing/wrong-type guards.
+      The sandbox is pid-tagged so concurrent smoke runs never collide. Full safe
+      set: 318 checks, all PASS. No new dependency
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1288,6 +1339,11 @@
       (file size / rows / columns, refused before writing a partial file), ASCII
       reply / real-UTF-8 file, handles non-tabular JSON + Excel + unknown types
       gracefully
+- [x] Productivity / text handling: extract emails / links / phone numbers / IPs /
+      numbers from text or a file -- done in Phase 40 (`extract_items`); pure stdlib
+      (no dep), real pattern matching + de-dup + validation (phone digit-count,
+      IP octet range), home-contained, bounded (text/file size, items listed, item
+      length), reuses count_words' file reader, ASCII-only; pairs with get_clipboard
 - [ ] Vision upgrade path: qwen2.5vl:3b (needs free RAM) or RAM upgrade
 - [ ] Autostart with Windows + system tray icon
 - [ ] Phone notifications on watch-mode alerts (e.g. ntfy.sh)

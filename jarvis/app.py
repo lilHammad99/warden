@@ -61,6 +61,7 @@ def main():
     from .tools import spreadsheet  # noqa: F401
     from .tools import tasks as task_list  # noqa: F401
     from .tools import textstats  # noqa: F401
+    from .tools import textextract  # noqa: F401
     from .tools import registry
     try:
         from .tools import browser  # noqa: F401
@@ -138,6 +139,7 @@ def main():
           "convert 5 miles to km / remind me in 10 minutes to stretch / "
           "how many days until christmas / add milk to my to-do list / "
           "how many words is my essay.txt / "
+          "pull the email addresses out of my clipboard / "
           "how many rows are in my data.csv / "
           "how many rows are in my budget.xlsx / "
           "what's in my export.json / "

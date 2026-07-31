@@ -1,7 +1,7 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
-dates, convert, textstats, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
+dates, convert, textstats, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
 """
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, organize, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, organize, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textextract, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -3488,6 +3488,221 @@ def t_textstats():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def t_textextract():
+    """Exercises the extract_items tool (pull emails/urls/phones/ips/numbers out
+    of text or a file) + its defenses against 8B hallucinations. Builds a temp
+    tree inside the user's home under a UNIQUE (pid-tagged) name so concurrent
+    smoke runs never collide; deterministic, needs no model, lives in the safe
+    set."""
+    import os
+    import pathlib
+    import shutil
+    import zipfile
+    from jarvis.tools import textextract as te  # noqa: F401  (register extract_items)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / f"jarvis_extract_smoke_{os.getpid()}"
+    rel = sandbox.name  # home-relative prefix for tool paths
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    (sandbox / "contacts.txt").write_text(
+        "reach the team at team@corp.io please\n", encoding="utf-8")
+    # a real .docx with an email inside (reuses read_document's extractor)
+    WNS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    xml = (f'<?xml version="1.0"?><w:document xmlns:w="{WNS}"><w:body>'
+           "<w:p><w:r><w:t>write to sales@shop.com or SALES@shop.com</w:t></w:r></w:p>"
+           "</w:body></w:document>")
+    with zipfile.ZipFile(sandbox / "letter.docx", "w") as z:
+        z.writestr("word/document.xml", xml)
+    (sandbox / "a.pdf").write_bytes(b"%PDF-1.4 not really")
+    (sandbox / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    saved_text_cap = te.MAX_TEXT_LEN
+    saved_items_cap = te.MAX_ITEMS
+    try:
+        def extracts_emails():
+            out = registry.dispatch("extract_items", {
+                "kind": "emails",
+                "text": "a@b.com or A@B.COM, also c.d+x@sub.example.co.uk; bad@ nope"})
+            # A@B.COM de-dupes with a@b.com (case-insensitive) -> 2 distinct
+            assert "Found 2 email addresses" in out, out
+            assert "a@b.com" in out and "c.d+x@sub.example.co.uk" in out, out
+            return "extracted + de-duped email addresses"
+        check("extract_items emails", extracts_emails)
+
+        def extracts_urls():
+            out = registry.dispatch("extract_items", {
+                "kind": "links",  # alias for urls
+                "text": "See https://example.com/page, and www.test.org. "
+                        "Also (http://foo.com/bar)."})
+            assert "Found 3 links" in out, out
+            # trailing punctuation stripped off the URLs
+            assert "https://example.com/page" in out, out
+            assert "www.test.org" in out and "http://foo.com/bar" in out, out
+            # trailing period / closing paren must have been stripped off the items
+            assert "www.test.org." not in out and "/bar)" not in out, out
+            return "extracted urls, trailing punctuation stripped, alias mapped"
+        check("extract_items urls", extracts_urls)
+
+        def extracts_phones():
+            out = registry.dispatch("extract_items", {
+                "kind": "phone numbers",  # alias
+                "text": "Call +1 (555) 123-4567 or 555-987-6543. "
+                        "Ref 1234567890 has no separators. Short 12-34."})
+            # the +... and ...-...-... are phones; the bare 10-digit run is NOT
+            # (that's a number), and 12-34 is too short
+            assert "Found 2 phone numbers" in out, out
+            assert "555-987-6543" in out, out
+            assert "1234567890" not in out, out
+            return "phones validated; bare digit run and short run excluded"
+        check("extract_items phones", extracts_phones)
+
+        def extracts_ips():
+            out = registry.dispatch("extract_items", {
+                "kind": "ips",
+                "text": "Server 192.168.0.1 and 10.0.0.255, bad 999.1.1.1 / 256.1.1.1."})
+            assert "Found 2 IP addresses" in out, out
+            assert "192.168.0.1" in out and "10.0.0.255" in out, out
+            assert "999.1.1.1" not in out and "256.1.1.1" not in out, out
+            return "ips extracted, out-of-range octets rejected"
+        check("extract_items ips", extracts_ips)
+
+        def extracts_numbers():
+            out = registry.dispatch("extract_items", {
+                "kind": "numbers",
+                "text": "I have 3 apples, 1,250 oranges, 3.5 kg, -7 debt, and 3 again."})
+            # 3 appears twice -> de-duped; 1,250 / 3.5 / -7 distinct -> 4
+            assert "Found 4 numbers" in out, out
+            assert "1,250" in out and "3.5" in out and "-7" in out, out
+            return "numbers extracted + de-duped (incl. decimals/negatives/commas)"
+        check("extract_items numbers", extracts_numbers)
+
+        def extracts_from_plain_file():
+            out = registry.dispatch("extract_items", {
+                "kind": "email", "path": f"{rel}/contacts.txt"})
+            assert "Found 1 email address" in out and "team@corp.io" in out, out
+            assert "contacts.txt" in out, out
+            return "extracted from a plain-text file"
+        check("extract_items plain file", extracts_from_plain_file)
+
+        def extracts_from_docx():
+            out = registry.dispatch("extract_items", {
+                "kind": "emails", "path": f"{rel}/letter.docx"})
+            # sales@shop.com + SALES@shop.com de-dupe -> 1
+            assert "Found 1 email address" in out and "sales@shop.com" in out, out
+            return "extracted from a Word .docx document"
+        check("extract_items docx", extracts_from_docx)
+
+        def filename_in_text_field():
+            # common 8B slip: filename dropped into 'text' -> read the FILE
+            out = registry.dispatch("extract_items", {
+                "kind": "emails", "text": f"{rel}/contacts.txt"})
+            assert "team@corp.io" in out, out
+            return "a filename in the text field is read as a file"
+        check("extract_items filename-in-text", filename_in_text_field)
+
+        def none_found():
+            out = registry.dispatch("extract_items", {
+                "kind": "emails", "text": "there are no addresses here at all"})
+            assert "didn't find any email addresses" in out, out
+            return "no matches -> friendly message"
+        check("extract_items none found", none_found)
+
+        def unknown_kind():
+            out = registry.dispatch("extract_items", {
+                "kind": "colors", "text": "red green blue"})
+            assert "Error" in out and "emails" in out and "numbers" in out, out
+            return "unknown kind -> lists the supported kinds"
+        check("extract_items unknown kind", unknown_kind)
+
+        def alt_arg_names():
+            out = registry.dispatch("extract_items", {
+                "type": "emails", "content": "ping me at x@y.com"})
+            assert "x@y.com" in out, out
+            return "alt arg names (type/content) accepted"
+        check("extract_items alt arg names", alt_arg_names)
+
+        def containment_guard():
+            out = registry.dispatch("extract_items", {
+                "kind": "numbers",
+                "path": "C:\\Windows\\System32\\drivers\\etc\\hosts"})
+            assert "only work inside your own folders" in out, out
+            # a ..-escape must also be refused
+            esc = registry.dispatch("extract_items", {
+                "kind": "numbers", "path": f"{rel}/../../../Windows/win.ini"})
+            assert "only work inside your own folders" in esc, esc
+            return "escape outside home blocked (absolute + ..)"
+        check("extract_items containment guard", containment_guard)
+
+        def folder_and_missing():
+            fol = registry.dispatch("extract_items", {"kind": "emails", "path": rel})
+            assert "is a folder" in fol, fol
+            miss = registry.dispatch("extract_items", {
+                "kind": "emails", "path": f"{rel}/ghost.txt"})
+            assert "can't find" in miss, miss
+            return "folder source + missing file are friendly messages"
+        check("extract_items folder + missing", folder_and_missing)
+
+        def refuses_pdf_and_binary():
+            pdf = registry.dispatch("extract_items", {
+                "kind": "numbers", "path": f"{rel}/a.pdf"})
+            assert "PDF" in pdf, pdf
+            png = registry.dispatch("extract_items", {
+                "kind": "numbers", "path": f"{rel}/pic.png"})
+            assert "isn't a text file" in png, png
+            return "pdf + binary files refused"
+        check("extract_items refuses non-text files", refuses_pdf_and_binary)
+
+        def long_text_truncated():
+            te.MAX_TEXT_LEN = 5   # temporarily tiny
+            out = registry.dispatch("extract_items", {
+                "kind": "numbers", "text": "12345 and 99999 more numbers"})
+            assert "first part" in out, out
+            te.MAX_TEXT_LEN = saved_text_cap
+            return "over-long text searched in part, not unbounded"
+        check("extract_items long-text truncation", long_text_truncated)
+
+        def many_items_capped():
+            te.MAX_ITEMS = 3
+            out = registry.dispatch("extract_items", {
+                "kind": "numbers", "text": "1 2 3 4 5 6 7"})
+            assert "and 4 more" in out and "first 3" in out, out
+            te.MAX_ITEMS = saved_items_cap
+            return "long result lists are capped with a summary"
+        check("extract_items item cap", many_items_capped)
+
+        def output_is_ascii():
+            registry.dispatch("extract_items", {
+                "kind": "emails", "text": "cafe naive resume x@y.com expose"}).encode("ascii")
+            registry.dispatch("extract_items", {
+                "kind": "emails", "path": f"{rel}/letter.docx"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("extract_items ascii-only output", output_is_ascii)
+
+        def hallucination_guards():
+            # empty / missing args -> friendly error, never a crash
+            assert "Error" in registry.dispatch("extract_items", {})
+            assert "Error" in registry.dispatch("extract_items", {"kind": "emails"})
+            assert "Error" in registry.dispatch("extract_items", {"kind": ""})
+            # wrong types must not raise
+            registry.dispatch("extract_items", {"kind": 123, "text": "x@y.com"})
+            registry.dispatch("extract_items", {"kind": "emails", "text": ["a", "b"]})
+            registry.dispatch("extract_items", {"kind": "emails", "path": {}})
+            registry.dispatch("extract_items", {"kind": None, "text": None})
+            # an unexpected extra arg is ignored, the call still succeeds
+            out = registry.dispatch("extract_items", {
+                "kind": "emails", "text": "hi x@y.com", "reason": "curious"})
+            assert "x@y.com" in out, out
+            return "guards held"
+        check("extract_items hallucination guards", hallucination_guards)
+    finally:
+        te.MAX_TEXT_LEN = saved_text_cap
+        te.MAX_ITEMS = saved_items_cap
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def t_spreadsheet():
     """Exercises the read_csv tool (summarise a CSV/TSV data file: row/column
     counts, column names, preview) + its defenses against 8B hallucinations.
@@ -4107,6 +4322,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
             "convert": t_convert, "textstats": t_textstats,
+            "textextract": t_textextract,
             "spreadsheet": t_spreadsheet, "jsondata": t_jsondata,
             "convertdata": t_convertdata,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
@@ -4126,6 +4342,7 @@ if __name__ == "__main__":
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()
+        t_textextract()
         t_spreadsheet(); t_jsondata(); t_convertdata()
         t_reminders(); t_dispatch()
     else:

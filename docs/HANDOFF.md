@@ -787,12 +787,47 @@ family; partners with find_files.
   empty/missing/wrong-type guards. Full safe set: 300 checks, all PASS. No new
   dependency added.
 
+## 2026-07-31 — Extract items from text (Phase 40)
+
+Added `extract_items` (`jarvis/tools/textextract.py`): a productivity / text-
+handling win in a fresh category (the document- and structured-data-READING
+families are complete). Harvesting every email / link / phone number / IP /
+number out of a block of text is an everyday chore the 8B model does badly (drops
+some, invents others, mangles formatting); Jarvis now does it EXACTLY ("get all
+the email addresses from this", "pull the links out of my clipboard", "find all
+the phone numbers in this document"). Pairs with get_clipboard and find_files/
+read_document. No new dependency (pure stdlib `re`).
+- Args `kind` (emails/urls/phones/ips/numbers, with a big alias map) + EITHER
+  `text` OR `path`. Reuses `textstats._read_file_text`/`_looks_like_path` (so a
+  plain-text/.docx/.odt file is read with the same bounded, binary-sniffed,
+  zip-bomb-guarded reader; a filename dropped into `text` is read as a file) and
+  `organize._resolve_under_home` (containment: a path outside home, incl. a
+  `..`-escape, is REJECTED). Read-only.
+- Correct not naive: URLs get trailing punctuation stripped; phones validated
+  (7-15 digits AND a real separator/`+`, so a bare digit run is a number not a
+  phone); IP octets range-checked (999.x rejected); results de-duped
+  (case-insensitively for emails/urls). Bounded: text capped (searched in part +
+  noted), over-large/binary/PDF file refused, items listed capped (200 + "and N
+  more"), each item length-bounded + pure single-line ASCII. Unknown/empty `kind`
+  lists the supported kinds; alt arg names (`type`/`what`/`content`/`file`/...);
+  wrong-type/folder/missing args -> friendly ASCII. Never raises.
+- Wired into `app.py` imports (`from .tools import textextract`) + the console
+  "Try:" line ("pull the email addresses out of my clipboard"), and the agent
+  system prompt (extract_items after the count_words bullet).
+- `tests/smoke.py textextract` (safe set): emails/urls/phones/ips/numbers happy
+  paths (de-dup, validation, punctuation strip), a plain-text file + a real
+  `.docx`, filename-in-text, no-match + unknown-kind, alt arg names, containment
+  (absolute + `..`-escape), folder/missing/PDF/binary refusals, over-long-text
+  truncation, item cap, ASCII-only, and the empty/missing/wrong-type guards. The
+  sandbox is **pid-tagged** so concurrent smoke runs never collide. Full safe set:
+  318 checks, all PASS. No new dependency.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 39 that is 64 without browser, 70 with (convert_data added one). No
+after Phase 40 that is 65 without browser, 71 with (extract_items added one). No
 tools are being silently dropped.
 
 ## How to test (in order)
