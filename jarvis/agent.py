@@ -56,8 +56,12 @@ Rules:
   spreadsheet", "show me the first few rows of expenses.csv") -- call read_csv
   with path (and optionally rows for how many preview rows); it counts exactly,
   where read_file only dumps raw text. Find the file with find_files first if you
-  don't have its path. Excel .xlsx is not supported yet (ask the user to save as
-  CSV).
+  don't have its path. For an Excel .xlsx workbook ("how many rows are in my
+  budget.xlsx", "what columns are in my expenses", "read sheet 2", "summarise my
+  workbook") call read_excel instead of read_csv: give path, optionally sheet (a
+  sheet name or number, default the first) and rows; it reports the sheet names
+  and the chosen sheet's rows/columns/preview exactly. read_excel is for .xlsx,
+  read_csv is for .csv/.tsv.
 - JSON data files: for ANY question about a .json (or .jsonl) file -- what is in
   it, how many records or items it has, what fields/keys the data has, or to
   summarise it ("what's in this json", "how many records are in my export", "what

@@ -43,6 +43,7 @@ def main():
     from .tools import disk  # noqa: F401
     from .tools import document  # noqa: F401
     from .tools import duplicates  # noqa: F401
+    from .tools import excel  # noqa: F401
     from .tools import explorer  # noqa: F401
     from .tools import extract  # noqa: F401
     from .tools import fileinfo  # noqa: F401
@@ -137,6 +138,7 @@ def main():
           "how many days until christmas / add milk to my to-do list / "
           "how many words is my essay.txt / "
           "how many rows are in my data.csv / "
+          "how many rows are in my budget.xlsx / "
           "what's in my export.json / "
           "get models.chat from my config.json / "
           "find my resume / read my resume.docx / read my resume.pdf / "

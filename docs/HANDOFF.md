@@ -702,13 +702,56 @@ this report", "what does this letter say"). Natural partner to `find_files`.
   behind pypdf being importable so the safe set passes clean either way. Full safe
   set: 271 checks, all PASS.
 
+## 2026-07-31 — Read Excel .xlsx workbooks (Phase 38) [SECOND DEPENDENCY ADDED]
+
+Added `read_excel` (`jarvis/tools/excel.py`): the Excel counterpart to Phase 30's
+`read_csv` and the "Structured data next" item in ROADMAP Future work. `read_csv`
+handles CSV/TSV but REFUSED a binary Excel workbook (steered to "save as CSV");
+now Jarvis reads a `.xlsx` directly ("how many rows are in my budget.xlsx", "what
+columns are in my expenses", "read sheet 2", "summarise my workbook"). Natural
+partner to `find_files`.
+- **Dependency (new, allowed under the policy):** `openpyxl`, pinned in
+  `requirements.txt`. Pure-Python, offline, no compiler/binary wheel (installed
+  clean as `openpyxl-3.1.5-py2.py3-none-any.whl` + pure-Python `et-xmlfile-2.0.0`).
+  Imported LAZILY inside the tool, so startup is unaffected; if missing the tool
+  returns a friendly "install openpyxl" message instead of crashing. Jarvis stays
+  fully local/offline. Fresh checkout:
+  `.venv\Scripts\python -m pip install openpyxl` (or `-r requirements.txt`).
+- Reports the sheet names and, for a chosen sheet, the data-row count, column
+  count, column names, and a preview of the first rows. `sheet` picks a worksheet
+  by NAME or 1-based NUMBER (default the first); an unknown sheet lists the real
+  names so the model self-corrects. Cells render cleanly: integral float -> int
+  (1200 not 1200.0), midnight datetime -> plain date, text transliterated to
+  readable ASCII (reuses `document._ascii_body`: cafe not caf?, straight quotes).
+- Reuses `organize._resolve_under_home` for containment (a path outside home,
+  incl. a `..`-escape, is REJECTED). Bounded: file on disk 25 MB, streaming
+  READ-ONLY mode (bounded memory), row scan 200k (stops early with a note), cell
+  + name truncation; a fully blank row isn't counted so the total stays honest.
+- Real-world cases never crash: corrupt/non-xlsx + password-protected -> friendly
+  message; old binary `.xls` -> steered to "save as .xlsx"; `.csv`/`.tsv` ->
+  steered to read_csv; other extensions refused. openpyxl's warnings silenced.
+  Alt arg names (`file`/`workbook`/`spreadsheet`/`tab`/...), wrong-type/empty/
+  missing args coerced or rejected. Never raises.
+- Wired into `app.py` imports (`from .tools import excel`) + the console "Try:"
+  line ("how many rows are in my budget.xlsx"), and the agent system prompt
+  (read_excel for .xlsx, read_csv for .csv/.tsv). `read_csv`'s old "save as CSV"
+  message now steers a .xlsx to read_excel.
+- `tests/smoke.py excel` (safe set) builds a real workbook with openpyxl and
+  covers summarising it, ASCII transliteration, int/float/date formatting, the
+  `rows` preview arg, sheet selection by name AND number + missing-sheet guard,
+  alt arg names, a corrupt workbook, the row-scan cap, the forced missing-
+  dependency message, non-xlsx types steered elsewhere, containment (absolute +
+  `..`-escape), folder + missing, and the empty/missing/wrong-type guards. The
+  parsing checks are GUARDED behind openpyxl being importable so the safe set
+  passes clean either way. Full safe set: 284 checks, all PASS.
+
 ## 2026-07-30 — Tool-count note
 
 Tool-count note (the fluctuating figure): NOT a registry bug. The registry holds
 exactly one entry per `@tool`-decorated function. The printed number only swings
 on whether the OPTIONAL `browser` module imports at count time (it adds 6):
-after Phase 37 that is 62 without browser, 68 with. No tools are being silently
-dropped.
+after Phase 38 that is 63 without browser, 69 with (read_excel added one). No
+tools are being silently dropped.
 
 ## How to test (in order)
 

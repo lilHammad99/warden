@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
 Sections: imports, tools, memory, shell, find, search, recent, organize,
-movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, explorer, archive, extract, recycle, clipboard, tasks, calc,
+movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, textstats, spreadsheet, jsondata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 (default: safe set)
@@ -26,7 +26,7 @@ def check(name, fn):
 def t_imports():
     def _all():
         from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, explorer, extract, fileinfo, files, find, jsondata, memory, organize, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
+        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, memory, organize, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textstats, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -1911,6 +1911,189 @@ def t_pdf():
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def t_excel():
+    """Exercises the read_excel tool (summarise an Excel .xlsx workbook) + its
+    defenses against 8B hallucinations. Builds a real workbook with openpyxl
+    inside a temp tree in the user's home, so it is deterministic and needs no
+    model. The checks that actually parse a workbook are GUARDED behind openpyxl
+    being importable, so the safe set passes cleanly whether or not the optional
+    dependency is installed; the containment/type/missing/wrong-type guards and
+    the graceful missing-dependency message are always exercised."""
+    import datetime
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import excel  # noqa: F401  (register read_excel)
+    from jarvis.tools import registry
+
+    have_openpyxl = excel._import_openpyxl() is not None
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    sandbox = home / "jarvis_excel_smoke"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    if have_openpyxl:
+        opx = excel._import_openpyxl()
+        wb = opx.Workbook()
+        ws = wb.active
+        ws.title = "Sales"
+        # a curly-quote / accented header + values to exercise ASCII transliteration
+        ws.append(["Name", "Amount", "Date", "Café “note”"])
+        ws.append(["Alice", 1200, datetime.date(2026, 1, 1), "ok"])
+        ws.append(["Bob", 3400.5, datetime.date(2026, 2, 2), "fine"])
+        ws.append([None, None, None, None])            # a fully blank row (not counted)
+        ws.append(["Carol", 900, datetime.date(2026, 3, 3), "done"])
+        wb.create_sheet("Empty")                        # a second, empty sheet
+        wb.save(str(sandbox / "budget.xlsx"))
+        wb.close()
+
+    try:
+        if have_openpyxl:
+            def happy():
+                out = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx"})
+                assert "2 sheets" in out and "Sales" in out and "Empty" in out, out
+                # blank row not counted -> 3 data rows, 4 columns
+                assert "3 data rows" in out and "4 column" in out, out
+                assert "Name, Amount, Date" in out, out
+                assert "Alice" in out and "1200" in out, out
+                return "workbook summarised: sheets, rows, columns, preview"
+            check("read_excel summarises a workbook", happy)
+
+            def ascii_only():
+                out = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx"})
+                out.encode("ascii")                     # pure ASCII or this raises
+                assert "Cafe" in out, out                # accent stripped, not 'Caf?'
+                assert '"note"' in out, out              # curly quotes -> straight
+                assert "?" not in out, out
+                return "curly quotes/accent -> clean ASCII"
+            check("read_excel ascii-only output", ascii_only)
+
+            def int_float_dates():
+                out = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx"})
+                assert "2026-01-01" in out, out          # date, no 00:00:00
+                assert "3400.5" in out, out              # real decimal kept
+                assert "1200.0" not in out, out          # integral float shown as int
+                return "int/float/date cells rendered cleanly"
+            check("read_excel cell formatting", int_float_dates)
+
+            def rows_preview():
+                out = registry.dispatch("read_excel",
+                    {"path": "jarvis_excel_smoke/budget.xlsx", "rows": 1})
+                assert "First 1 row" in out, out
+                assert "Alice" in out and "Bob" not in out, out
+                return "rows preview count honored"
+            check("read_excel rows preview", rows_preview)
+
+            def pick_sheet():
+                # by name AND by number; the Empty sheet reports empty
+                byname = registry.dispatch("read_excel",
+                    {"path": "jarvis_excel_smoke/budget.xlsx", "sheet": "Empty"})
+                assert "is empty" in byname, byname
+                bynum = registry.dispatch("read_excel",
+                    {"path": "jarvis_excel_smoke/budget.xlsx", "sheet": 1})
+                assert "'Sales'" in bynum and "3 data rows" in bynum, bynum
+                missing = registry.dispatch("read_excel",
+                    {"path": "jarvis_excel_smoke/budget.xlsx", "sheet": "Ghost"})
+                assert "no sheet called" in missing and "Sales" in missing, missing
+                return "sheet selection by name/number + missing-sheet guard"
+            check("read_excel sheet selection", pick_sheet)
+
+            def alt_arg_names():
+                out = registry.dispatch("read_excel",
+                    {"workbook": "jarvis_excel_smoke/budget.xlsx"})
+                assert "3 data rows" in out, out
+                out2 = registry.dispatch("read_excel",
+                    {"file": "jarvis_excel_smoke/budget.xlsx", "tab": "Sales"})
+                assert "'Sales'" in out2, out2
+                return "alt workbook/file/tab arg names handled"
+            check("read_excel alt arg names", alt_arg_names)
+
+            def corrupt():
+                (sandbox / "bad.xlsx").write_bytes(b"this is not a real xlsx")
+                r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/bad.xlsx"})
+                assert "isn't a valid Excel workbook" in r, r
+                return "corrupt/non-xlsx -> friendly, no raise"
+            check("read_excel corrupt workbook", corrupt)
+
+            def row_scan_cap():
+                orig = excel.MAX_ROWS
+                excel.MAX_ROWS = 2                       # header + 1 row, then stop
+                try:
+                    r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx"})
+                    assert "stopped early" in r, r
+                finally:
+                    excel.MAX_ROWS = orig
+                return "huge sheet stops early with a note"
+            check("read_excel row-scan cap", row_scan_cap)
+        else:
+            print("  [SKIP] read_excel parsing checks (openpyxl not installed)")
+
+        def missing_dependency():
+            # force the dependency to look absent and prove the graceful message,
+            # independent of whether openpyxl is actually installed here.
+            (sandbox / "any.xlsx").write_bytes(b"PK\x03\x04placeholder")
+            orig = excel._import_openpyxl
+            excel._import_openpyxl = lambda: None
+            try:
+                r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/any.xlsx"})
+                assert "openpyxl" in r and "Error" in r, r
+            finally:
+                excel._import_openpyxl = orig
+            return "missing openpyxl -> friendly install message"
+        check("read_excel missing-dependency guard", missing_dependency)
+
+        def wrong_type_steer():
+            (sandbox / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+            r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/data.csv"})
+            assert "read_csv" in r, r
+            (sandbox / "old.xls").write_bytes(b"\xd0\xcf\x11\xe0old")
+            r2 = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/old.xls"})
+            assert "old Excel" in r2 and "save it as .xlsx" in r2, r2
+            (sandbox / "note.txt").write_text("hi", encoding="utf-8")
+            r3 = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/note.txt"})
+            assert "isn't an Excel workbook" in r3, r3
+            return "non-xlsx types steered elsewhere"
+        check("read_excel wrong-type steer", wrong_type_steer)
+
+        def containment_guard():
+            r = registry.dispatch("read_excel", {"path": "C:\\Windows\\book.xlsx"})
+            assert "only work inside your own folders" in r, r
+            r2 = registry.dispatch("read_excel",
+                {"path": "jarvis_excel_smoke/../../../Windows/x.xlsx"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked"
+        check("read_excel containment guard", containment_guard)
+
+        def folder_and_missing():
+            r = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke"})
+            assert "is a folder" in r, r
+            r2 = registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/nope.xlsx"})
+            assert "can't find" in r2, r2
+            return "folder + missing -> friendly messages"
+        check("read_excel folder/missing guards", folder_and_missing)
+
+        def hallucination_guards():
+            # wrong types / weird shapes must not raise
+            registry.dispatch("read_excel", {"path": 123})
+            registry.dispatch("read_excel", {"path": ["a"]})
+            registry.dispatch("read_excel", {"path": {}})
+            registry.dispatch("read_excel", {"path": None})
+            registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx", "rows": "junk"})
+            registry.dispatch("read_excel", {"path": "jarvis_excel_smoke/budget.xlsx", "sheet": []})
+            assert "Error" in registry.dispatch("read_excel", {"path": ""})
+            assert "Error" in registry.dispatch("read_excel", {})   # missing arg
+            if have_openpyxl:
+                # a stray extra arg is dropped, the call still succeeds
+                out = registry.dispatch("read_excel",
+                    {"path": "jarvis_excel_smoke/budget.xlsx", "reason": "curious"})
+                assert "3 data rows" in out, out
+            return "guards held"
+        check("read_excel hallucination guards", hallucination_guards)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def t_explorer():
     """Exercises the open_folder tool (reveal in Explorer) + its defenses against
     8B hallucinations. The real Explorer launch is swapped for a hermetic fake
@@ -3398,7 +3581,7 @@ def t_spreadsheet():
 
         def refuses_excel_and_binary():
             xl = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/book.xlsx"})
-            assert "Excel" in xl and "save it as CSV" in xl, xl
+            assert "Excel" in xl and "read_excel" in xl, xl
             nul = registry.dispatch("read_csv", {"path": "jarvis_csv_smoke/blob.csv"})
             assert "doesn't look like a text data file" in nul, nul
             return "Excel steered + NUL-byte file refused"
@@ -3720,7 +3903,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "makefolder": t_makefolder, "duplicates": t_duplicates,
             "fileinfo": t_fileinfo, "compare": t_compare,
             "disk": t_disk, "document": t_document, "pdf": t_pdf,
-            "explorer": t_explorer,
+            "excel": t_excel, "explorer": t_explorer,
             "archive": t_archive,
             "extract": t_extract, "recycle": t_recycle, "clipboard": t_clipboard,
             "tasks": t_tasks, "calc": t_calc, "dates": t_dates,
@@ -3739,7 +3922,7 @@ if __name__ == "__main__":
         t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
         t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder()
         t_duplicates(); t_fileinfo(); t_compare(); t_disk()
-        t_document(); t_pdf(); t_explorer()
+        t_document(); t_pdf(); t_excel(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()
         t_tasks(); t_calc(); t_dates(); t_convert(); t_textstats()

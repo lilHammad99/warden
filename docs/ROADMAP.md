@@ -1071,6 +1071,62 @@
       pypdf being importable so the safe set passes clean either way. Full safe set:
       271 checks, all PASS
 
+### Phase 38 — Read Excel .xlsx workbooks (2026-07-31)
+- [x] `read_excel` tool (`jarvis/tools/excel.py`): the Excel counterpart to
+      Phase 30's `read_csv` and the "Structured data next" item in Future work.
+      `read_csv` handles plain-text CSV/TSV but REFUSES a binary Excel workbook
+      (it told the user to "save it as CSV") -- yet a spreadsheet is exactly the
+      kind of file a real user keeps in Excel (budgets, expenses, contact lists,
+      exports). Now Jarvis reads a `.xlsx` directly and measures it EXACTLY: how
+      many sheets, and for a chosen sheet how many data rows and columns, the
+      column names, and a preview of the first rows ("how many rows are in my
+      workbook.xlsx", "what columns are in my budget", "read sheet 2", "summarise
+      my expenses spreadsheet") -- the natural partner to `find_files`
+- [x] **Second dependency added under the updated policy:** `openpyxl` (pinned in
+      `requirements.txt`) -- a well-established, PURE-PYTHON, offline package (no
+      compiler, no binary wheel, no network; installed clean as
+      `openpyxl-3.1.5-py2.py3-none-any.whl` + pure-Python `et-xmlfile`). Imported
+      LAZILY inside the tool so startup pays nothing; a missing dep degrades to a
+      friendly "install openpyxl" message instead of crashing. Jarvis stays
+      fully local/offline. Fresh checkout: `.venv\Scripts\python -m pip install
+      openpyxl` (or `-r requirements.txt`)
+- [x] Rooted in the user's home only (shares `organize._resolve_under_home`): a
+      path outside home -- including a `..`-escape, resolved and re-checked -- is
+      REJECTED, so Jarvis can never read a workbook from `C:\Windows`
+- [x] Bounded everywhere: the file on disk (25 MB) is capped before opening, the
+      workbook is opened in openpyxl's streaming READ-ONLY mode (bounded memory
+      on a huge sheet), the row scan is capped (200k, stops early with a note),
+      and every listed sheet/column name and preview cell is truncated -- a giant
+      or hostile file can't exhaust memory or flood the agent's context. A fully
+      blank row isn't counted so the data-row total stays honest
+- [x] `sheet` picks a worksheet by NAME or 1-based NUMBER (default the first);
+      an unknown sheet lists the real sheet names so the model can self-correct.
+      Cell values are rendered cleanly: an integral float shows as an int
+      (1200 not 1200.0), a midnight datetime shows as a plain date, and text is
+      transliterated to readable ASCII (reuses read_document's transliterator:
+      cafe not caf?, straight quotes not curly)
+- [x] Handles the real-world cases gracefully, never crashes: a corrupt/non-xlsx
+      or password-protected workbook -> friendly message; an old binary `.xls` ->
+      steered to "save as .xlsx"; a `.csv`/`.tsv` -> steered to read_csv; any
+      other extension refused. openpyxl's warnings are silenced so a quirky
+      workbook is never console noise. Alt arg names (`file`/`workbook`/
+      `spreadsheet`/`tab`/...), wrong-type/empty/missing args coerced or rejected
+- [x] Auto-registers via a new `excel` import in `app.py`; the agent system prompt
+      steers "read/summarise that Excel workbook / how many rows in my .xlsx" to
+      `read_excel` (read_excel for .xlsx, read_csv for .csv/.tsv); `read_csv`'s old
+      "save as CSV" message now points at read_excel; the console "Try:" line
+      suggests "how many rows are in my budget.xlsx"
+- [x] `tests/smoke.py excel` (in the safe set) builds a real workbook with
+      openpyxl and covers summarising it (sheets/rows/columns/preview), the ASCII
+      transliteration, int/float/date cell formatting, the `rows` preview arg,
+      sheet selection by name AND number + the missing-sheet guard, alt arg names,
+      a corrupt workbook, the row-scan cap, the graceful missing-dependency
+      message (forced regardless of environment), non-xlsx types steered
+      elsewhere (.csv/.xls/.txt), the containment guard (absolute AND `..`-escape),
+      folder + missing guards, and the empty/missing/wrong-type guards. The
+      workbook-parsing checks are GUARDED behind openpyxl being importable so the
+      safe set passes clean either way. Full safe set: 284 checks, all PASS
+
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
@@ -1158,10 +1214,14 @@
       read-only, reports identical/different + added/removed line counts + a bounded
       changed-line preview, home-contained (both paths), text-only (binary refused),
       bounded (file size / lines / preview), ASCII-only
-- [ ] Structured data next: an Excel `.xlsx` reader (needs a dependency like
-      openpyxl, which is NOT currently installed) so "how many rows in my
-      workbook.xlsx" / "read sheet 2" works; read_csv already tells the user to
-      save as CSV. Same home-contained + bounded + ASCII care as read_csv
+- [x] Structured data: an Excel `.xlsx` reader -- done in Phase 38 (`read_excel`);
+      the second added dependency under the policy (`openpyxl`, pure-Python/offline,
+      imported lazily so startup pays nothing and a missing dep degrades to a
+      friendly message). Reports sheet names + a chosen sheet's rows/columns/preview
+      exactly; `sheet` picks by name or number; home-contained, bounded (file size /
+      streaming read-only / row scan / cell truncation), ASCII-transliterated,
+      handles corrupt/password-protected/.xls gracefully; read_csv now steers a .xlsx
+      here
 - [x] Structured data: query a nested value inside a JSON file by key path
       (e.g. 'get models.chat') -- done in Phase 35 (`get_json_value`); pure stdlib
       (no dep), reuses read_json's shared loader, dotted/bracket key paths,

@@ -153,9 +153,12 @@ def read_csv(path: str = "", rows=None, **extra) -> str:
                 "data file to read.")
 
     suffix = p.suffix.lower()
-    if suffix in (".xlsx", ".xls"):
-        return (f"Error: '{_ascii(p.name)}' is an Excel file, sir, which I can't "
-                "read yet; save it as CSV and I'll read that.")
+    if suffix in (".xlsx", ".xlsm"):
+        return (f"Error: '{_ascii(p.name)}' is an Excel workbook, sir; use "
+                "read_excel for that. read_csv is for .csv/.tsv text files.")
+    if suffix == ".xls":
+        return (f"Error: '{_ascii(p.name)}' is an old Excel file, sir; open it "
+                "in Excel and save it as .xlsx (then use read_excel) or as CSV.")
     if suffix == ".pdf":
         return "Error: that's a PDF, sir; I can't read those yet."
     if suffix in _BINARY_EXT:
