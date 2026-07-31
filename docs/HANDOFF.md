@@ -1090,11 +1090,27 @@ missing or broken -- check all the skills and functions".
     (no webcam / init failed); they now return a friendly `_NO_CAM` message.
   - Full safe set PASS incl. the 5 new writer checks; camera/vision/tts smokes
     PASS after the guard changes.
-  Remaining untested (work, but no automated guard yet): append_file, list_folder,
-  open_app/open_website/open_folder, take_screenshot, lock_pc, set_volume,
-  web_search/fetch_page, browser_*, get_weather, the camera tools. Next hardening
-  pass should add a network section (weather/web_search/fetch_page) and a
-  system/hardware section.
+## 2026-07-31 — Coverage: network + system smoke sections (close the gap)
+
+Built the two sections the prior audit called for, so the untested tools now have
+guards:
+- SAFE set gained `append_file` + `list_folder` (in t_tools) -- pure filesystem,
+  deterministic. (list_folder test uses a dedicated small dir: the real tool caps
+  its listing at 100 items, which flaked against the huge shared temp dir.)
+- New **`network`** section (`smoke network`, needs internet, NOT in safe):
+  web_search returns results, fetch_page reads example.com, get_weather returns
+  live conditions here + for a named place, and get_weather's `_clean_location`
+  filters filler offline. This is the section that would have caught the weather
+  bug.
+- New **`system`** section (`smoke system`, touches hardware, NOT in safe):
+  take_screenshot writes a real PNG (validated by magic bytes) + cleans up;
+  set_volume reads/sets/mutes and RESTORES the original level; open_app,
+  open_website, open_folder are exercised with their launcher faked (no windows
+  pop up) to check command-building / URL-normalisation / home-containment;
+  lock_pc is checked as registered but deliberately NOT executed.
+Results: safe set now 342 checks PASS; `network` and `system` both PASS. Still no
+automated guard for the browser_* tools (covered live in the audit + e2e) and the
+camera tools (covered by the camera/vision sections + the new None-manager guard).
 
 ## How to test (in order)
 

@@ -1,8 +1,11 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
-Sections: imports, tools, memory, shell, find, search, recent, organize,
+Sections: imports, tools, memory, writers, shell, find, search, recent, organize,
 movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, textstats, numstats, password, textcodec, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
+Live sections needing internet/hardware (run explicitly, NOT in the safe set):
+  network (web_search, fetch_page, get_weather), system (screenshot, volume,
+  open_app/website/folder), plus camera, vision, tts, watch, hud, agent, e2e.
 (default: safe set)
 """
 
@@ -46,6 +49,27 @@ def t_tools():
                        "jarvis_smoke_%d_%s.txt" % (os.getpid(), uuid.uuid4().hex))
     check("write_file", lambda: registry.dispatch("write_file", {"path": tmp, "content": "hello"}))
     check("read_file", lambda: registry.dispatch("read_file", {"path": tmp}))
+
+    def _append():
+        registry.dispatch("append_file", {"path": tmp, "content": " world"})
+        out = registry.dispatch("read_file", {"path": tmp})
+        assert "hello world" in out, out
+        return "append_file grows the file"
+    check("append_file", _append)
+
+    def _listfolder():
+        import shutil
+        # a dedicated small dir: the shared temp dir has 1000s of files and
+        # list_folder caps its output at 100, which would flake the assertion
+        d = tempfile.mkdtemp(prefix="jarvis_ls_%d_" % os.getpid())
+        open(os.path.join(d, "marker.txt"), "w").close()
+        try:
+            out = registry.dispatch("list_folder", {"path": d})
+            assert "marker.txt" in out, out
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+        return "list_folder lists a folder"
+    check("list_folder", _listfolder)
     try:
         os.remove(tmp)
     except OSError:
@@ -4759,8 +4783,126 @@ def t_writers():
         shutil.rmtree(sb, ignore_errors=True)
 
 
+def t_network():
+    """Live NETWORK tools: web_search, fetch_page, get_weather. Needs internet,
+    so NOT in the safe set -- run with `smoke network`. get_weather's location
+    cleaning is checked offline. This is the section that would have caught the
+    'weather says it can't find it' bug."""
+    from jarvis.tools import registry, weather, web  # noqa: F401
+
+    def search():
+        out = registry.dispatch("web_search", {"query": "wikipedia"})
+        assert not out.startswith("Error") and "http" in out.lower(), out[:120]
+        return "web_search returns results"
+    check("web_search (network)", search)
+
+    def fetch():
+        out = registry.dispatch("fetch_page", {"url": "https://example.com"})
+        assert "Example Domain" in out, out[:120]
+        return "fetch_page returns readable text"
+    check("fetch_page (network)", fetch)
+
+    def wx():
+        out = registry.dispatch("get_weather", {})
+        assert not out.startswith("Error") and "C" in out, out
+        out2 = registry.dispatch("get_weather", {"location": "London"})
+        assert not out2.startswith("Error"), out2
+        return "get_weather returns current conditions here + for a named place"
+    check("get_weather (network)", wx)
+
+    def clean():
+        assert weather._clean_location("today") == ""
+        assert weather._clean_location("whats the weather like today") == ""
+        assert weather._clean_location("weather in London") == "London"
+        assert weather._clean_location("New York") == "New York"
+        return "get_weather ignores filler locations (IP-geolocates)"
+    check("get_weather location cleaning", clean)
+
+
+def t_system():
+    """Live SYSTEM/hardware tools: screenshot, volume, open_app/website/folder,
+    lock_pc. Screenshot + volume are real but self-cleaning/restoring; the
+    launch-y tools are faked so no windows pop up; lock_pc is NOT executed. Not
+    in the safe set (touches hardware) -- run with `smoke system`."""
+    import re
+    from pathlib import Path
+
+    from jarvis.tools import apps, explorer, registry, system  # noqa: F401
+
+    def screenshot():
+        out = registry.dispatch("take_screenshot", {})
+        m = re.search(r"to (.+\.png)", out)
+        assert m, out
+        f = Path(m.group(1).strip().strip("`"))
+        assert f.exists(), "screenshot not created"
+        assert f.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", "not a real PNG"
+        f.unlink()
+        return "take_screenshot saves a real PNG"
+    check("take_screenshot", screenshot)
+
+    def volume():
+        from jarvis.tools.system import _volume_endpoint
+        orig = round(_volume_endpoint().GetMasterVolumeLevelScalar() * 100)
+        out = registry.dispatch("set_volume", {"level": 25})
+        assert "25%" in out, out
+        now = round(_volume_endpoint().GetMasterVolumeLevelScalar() * 100)
+        assert now == 25, f"volume not set (is {now})"
+        assert "Muted" in registry.dispatch("set_volume", {"mute": True})
+        registry.dispatch("set_volume", {"mute": False})
+        registry.dispatch("set_volume", {"level": orig})  # restore
+        return "set_volume reads/sets/mutes/restores"
+    check("set_volume", volume)
+
+    def openapp():
+        launched = []
+        real = apps.subprocess.Popen
+        apps.subprocess.Popen = lambda cmd, **k: launched.append(cmd)
+        try:
+            out = registry.dispatch("open_app", {"name": "notepad"})
+        finally:
+            apps.subprocess.Popen = real
+        assert "Opened" in out and launched and "notepad" in launched[0].lower(), (out, launched)
+        return "open_app builds a launch command (faked)"
+    check("open_app", openapp)
+
+    def openweb():
+        opened = []
+        real = apps.webbrowser.open
+        apps.webbrowser.open = lambda u: opened.append(u)
+        try:
+            registry.dispatch("open_website", {"url": "example.com"})
+            registry.dispatch("open_website", {"url": "youtube"})
+        finally:
+            apps.webbrowser.open = real
+        assert opened[0] == "https://example.com", opened
+        assert opened[1].startswith("http"), opened
+        return "open_website normalises urls / site names (faked)"
+    check("open_website", openweb)
+
+    def openfolder():
+        opened = []
+        real = explorer._reveal
+        explorer._reveal = lambda path, is_file: opened.append(str(path))
+        try:
+            out = registry.dispatch("open_folder", {"folder": "Desktop"})
+            assert not out.startswith("Error") and opened, out
+            bad = registry.dispatch("open_folder", {"folder": "C:/Windows"})
+            assert bad.startswith("Error"), bad  # outside home refused
+        finally:
+            explorer._reveal = real
+        return "open_folder opens home, refuses outside home (faked)"
+    check("open_folder", openfolder)
+
+    check("lock_pc registered (not executed)",
+          lambda: "ok" if "lock_pc" in registry.names() else _fail())
+
+
+def _fail():
+    raise AssertionError("lock_pc missing from registry")
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
-            "writers": t_writers,
+            "writers": t_writers, "network": t_network, "system": t_system,
             "shell": t_shell, "find": t_find, "search": t_search,
             "recent": t_recent, "organize": t_organize,
             "movefolder": t_movefolder, "copyfolder": t_copyfolder,
