@@ -90,16 +90,16 @@ def t_memory():
     mem._STORE = pathlib.Path(_memdir) / "memory.json"
 
     def happy_path():
-        assert "Remembered" in registry.dispatch("remember", {"fact": "The user's name is the user"})
-        assert "the user" in registry.dispatch("recall", {"query": "name"})
+        assert "Remembered" in registry.dispatch("remember", {"fact": "The user's name is Alex"})
+        assert "Alex" in registry.dispatch("recall", {"query": "name"})
         assert mem.count() == 1
         # remember/recall show up in the injected preamble
-        assert "the user" in mem.memory_preamble()
+        assert "Alex" in mem.memory_preamble()
         return "remember/recall/preamble ok"
     check("memory happy path", happy_path)
 
     def dedup():
-        registry.dispatch("remember", {"fact": "The user's name is the user"})
+        registry.dispatch("remember", {"fact": "The user's name is Alex"})
         return f"count still {mem.count()} (deduped)" if mem.count() == 1 \
             else (_ for _ in ()).throw(AssertionError("duplicate stored"))
     check("memory dedup", dedup)
@@ -147,7 +147,7 @@ def t_memory():
 
     def forget_flow():
         before = mem.count()
-        assert "Forgotten" in registry.dispatch("forget", {"query": "the user"})
+        assert "Forgotten" in registry.dispatch("forget", {"query": "Alex"})
         assert mem.count() == before - 1
         assert "Nothing in memory matches" in registry.dispatch("forget", {"query": "zzzz"})
         return "forget ok"
@@ -262,9 +262,9 @@ def t_lessons():
     check("lessons forget", forget_flow)
 
     def ambiguous_forget_safe():
-        registry.dispatch("learn_lesson", {"lesson": "the user likes short answers"})
-        registry.dispatch("learn_lesson", {"lesson": "the user likes bold changes"})
-        r = registry.dispatch("forget_lesson", {"query": "the user likes"})
+        registry.dispatch("learn_lesson", {"lesson": "Alex likes short answers"})
+        registry.dispatch("learn_lesson", {"lesson": "Alex likes bold changes"})
+        r = registry.dispatch("forget_lesson", {"query": "Alex likes"})
         assert "please be more specific" in r, r
         return "ambiguous forget deletes nothing"
     check("lessons ambiguous-forget safety", ambiguous_forget_safe)
@@ -5054,7 +5054,7 @@ def t_convertdata():
 
     # a CSV with a header, two data rows, and a blank trailing row (must NOT count)
     (sandbox / "data.csv").write_text(
-        "name,age,city\nthe user,30,Casablanca\nSara,25,Rabat\n\n", encoding="utf-8")
+        "name,age,city\nAlex,30,Casablanca\nSara,25,Rabat\n\n", encoding="utf-8")
     # JSON array of objects with a differing/extra key and an accented value
     (sandbox / "people.json").write_text(json.dumps(
         [{"name": "Zoe", "role": "dev"}, {"name": "café", "vip": True}]),
@@ -5073,7 +5073,7 @@ def t_convertdata():
             assert made.exists(), "output file not written"
             recs = json.loads(made.read_text(encoding="utf-8"))
             assert recs == [
-                {"name": "the user", "age": "30", "city": "Casablanca"},
+                {"name": "Alex", "age": "30", "city": "Casablanca"},
                 {"name": "Sara", "age": "25", "city": "Rabat"},
             ], recs                       # blank row skipped, values kept as strings
             return "CSV -> JSON array of objects, blank row not counted"
@@ -5099,7 +5099,7 @@ def t_convertdata():
             assert "Converted" in out and "JSON" in out, out
             body = (sandbox / "rows.jsonl").read_text(encoding="utf-8")
             recs = [json.loads(ln) for ln in body.splitlines() if ln.strip()]
-            assert len(recs) == 2 and recs[0]["name"] == "the user", recs
+            assert len(recs) == 2 and recs[0]["name"] == "Alex", recs
             return "dest extension .jsonl -> JSON Lines output"
         check("convert_data explicit dest / jsonl", explicit_jsonl_dest)
 

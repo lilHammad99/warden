@@ -4,12 +4,11 @@ Read this first if you are a new Claude session taking over.
 
 ## What this project is
 
-Local Iron-Man-style AI assistant in `path\to\jarvis`
-(git repo, 2 commits). Owner: the user. Everything local: Ollama brain,
-camera vision, voice, file/app/system/browser tools.
+Local Iron-Man-style AI assistant, kept in the owner's own project folder
+(git repo). Everything local: Ollama brain, camera vision, voice,
+file/app/system/browser tools.
 See `docs/DESIGN.md` (architecture) and `docs/ROADMAP.md` (future work).
-The old GitHub repos in the parent folder (`Jarvis-master`, *.zip) are
-reference only — do not touch them.
+Older reference copies may sit in the parent folder — do not touch them.
 
 ## Environment facts
 
@@ -18,7 +17,7 @@ reference only — do not touch them.
   DOWNLOADED ✅), `qwen3:8b` (brain, was ~50% downloading — check with
   `ollama list`; if missing run `ollama pull qwen3:8b`)
 - Dev machine: consumer laptop, mid-range GPU, memory-constrained
-- git identity set locally (the user / you@example.com)
+- git identity is set locally
 
 ## State when this file was last updated (2026-07-29, end of build session)
 
@@ -35,12 +34,12 @@ NOT qwen2.5vl:3b — that one failed with "requires 8.4 GiB, available
 model first and uses `keep_alive=0` (RAM can't hold both models).
 
 NOT yet human-tested: actually saying "Hey Jarvis" into the mic (init +
-mic-level verified only). First thing next session: have the user try voice,
+mic-level verified only). First thing next session: have the owner try voice,
 tune `ENERGY_THRESHOLD` in `jarvis/voice/stt.py` if needed.
 
 ## 2026-07-30 — Listening UX (Phase 5)
 
-the user reported wake word often missed + no feedback + feels laggy. Added a
+The user reported wake word often missed + no feedback + feels laggy. Added a
 floating "Jarvis orb" HUD and wake tuning. See
 `docs/superpowers/specs/2026-07-30-jarvis-listening-hud-design.md`.
 
@@ -947,7 +946,7 @@ No tools are being silently dropped.
 
 ## 2026-07-31 — Fix: loops after every question + apparent loss of voice/vision
 
-the user reported Jarvis getting "stuck in a loop after every minor question" and
+The user reported Jarvis getting "stuck in a loop after every minor question" and
 "losing the ability to talk and to see". Diagnosed and fixed; NO model swap was
 needed (tested and rejected — see below).
 
@@ -998,7 +997,7 @@ is busy").
 
 ## 2026-07-31 — Fix: PDFs that won't open + Jarvis went mute after one line
 
-the user reported (a) a written PDF (his CV) won't open and (b) Jarvis still can't
+The user reported (a) a written PDF (their CV) won't open and (b) Jarvis still can't
 talk aloud. Both root-caused and fixed.
 
 1. **"PDF won't open."** There was NO pdf-WRITER tool — only `read_pdf` and
@@ -1030,7 +1029,7 @@ Also fixed this session: `set_volume` for pycaw 20251023 (see the earlier commit
 
 ## 2026-07-31 — Weather that works, a Word writer, a resourcefulness nudge
 
-the user: "what's the weather like today" made Jarvis web_search and then say it
+The user: "what's the weather like today" made Jarvis web_search and then say it
 couldn't find it; also asked for a .docx writer and to make Jarvis "more like
 you".
 
@@ -1061,7 +1060,7 @@ reports the correct local city; create_docx/create_pdf produce openable files
 
 ## 2026-07-31 — create_xlsx + a real audit ("why is something always broken")
 
-the user asked for an Excel writer and, frustrated, "why is there always something
+The user asked for an Excel writer and, frustrated, "why is there always something
 missing or broken -- check all the skills and functions".
 
 - **create_xlsx** (`jarvis/tools/makexlsx.py`): the third writer (after
@@ -1436,7 +1435,7 @@ desktop...`, `start working`, `what do you see`, voice "Hey Jarvis".
 
 ## 2026-08-18 — Second model bake-off (bigger brain REJECTED again) + 4 agent-loop fixes
 
-the user asked for "a much bigger model even if that makes him slower". Measured it
+The user asked for "a much bigger model even if that makes him slower". Measured it
 properly instead of assuming, and the answer is the same as 2026-07-31: on this
 box a bigger brain is slower and NOT smarter. Config unchanged: still `qwen3:8b`.
 
