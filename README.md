@@ -53,3 +53,7 @@ Then: `start working on front door`.
 - `docs/ROADMAP.md` — what's next; `docs/DESIGN.md` — how it works
 
 The Python package is still named `jarvis/`, from the project's working title.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
