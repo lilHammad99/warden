@@ -1364,7 +1364,7 @@
 ## Known limits of v1
 - Vision uses `moondream` (small) because qwen2.5vl:3b needs ~8.4 GB free
   RAM; descriptions are basic. Swap `vision:` in config.yaml if RAM frees up.
-- Chat model unloads/reloads when vision runs (limited RAM) → "what do you
+- Chat model unloads/reloads when vision runs (RAM can't hold both) → "what do you
   see" has a few seconds of extra delay, and the next chat reply too.
 - 8B local model: fine for essays/files/apps, patient-but-imperfect at
   multi-step browser tasks.

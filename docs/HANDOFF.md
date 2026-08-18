@@ -16,7 +16,8 @@ Older reference copies may sit in the parent folder — do not touch them.
 - Ollama installed. Models: `llama3:8b` (old), `qwen2.5vl:3b` (vision,
   DOWNLOADED ✅), `qwen3:8b` (brain, was ~50% downloading — check with
   `ollama list`; if missing run `ollama pull qwen3:8b`)
-- Dev machine: consumer laptop, mid-range GPU, memory-constrained
+- Dev machine: consumer laptop, mid-range GPU, memory-constrained — only one
+  model fits at a time, which drives several choices below
 - git identity is set locally
 
 ## State when this file was last updated (2026-07-29, end of build session)
@@ -30,7 +31,7 @@ mode, browser opened+read+clicked pages, app boots with voice on.
 
 IMPORTANT deviation from original design: vision model is `moondream`,
 NOT qwen2.5vl:3b — that one failed with "requires 8.4 GiB, available
-~7.2" on this dev machine. Also `describe_frame` unloads the chat
+~7.2" on the dev machine. Also `describe_frame` unloads the chat
 model first and uses `keep_alive=0` (RAM can't hold both models).
 
 NOT yet human-tested: actually saying "Hey Jarvis" into the mic (init +
@@ -1440,7 +1441,7 @@ properly instead of assuming, and the answer is the same as 2026-07-31: on this
 box a bigger brain is slower and NOT smarter. Config unchanged: still `qwen3:8b`.
 
 Bake-off through the REAL Agent (mind + router + 88 tools), 8 questions, one
-model at a time on an idle box (memory-constrained dev laptop):
+model at a time on an idle dev machine (the memory-constrained laptop above):
 - `qwen3:8b` -- **6/8, 188 s**
 - `qwen3:14b` -- **6/8, 341 s** (same accuracy, 1.8x slower; 98 s on one question)
 - `gpt-oss:20b` -- **2/8, 239 s**. With `think=False` Ollama returns 500
@@ -1499,6 +1500,7 @@ and `days_between` both return the correct 75). Occasional meta-narration leaks
 ("The user asked for a unit conversion, and I already provided...").
 
 OPERATIONAL: the Ollama server DIED silently mid-session while cycling the 13 GB
-gpt-oss model on the dev machine, which looks exactly like "Jarvis broke".
+gpt-oss model, which needs more memory than the dev machine has free -- and the
+silent death looks exactly like "Jarvis broke".
 20B-class models are memory-unsafe here. `gpt-oss:20b` and `qwen3:14b` were
 removed after the bake-off to reclaim 22.3 GB.

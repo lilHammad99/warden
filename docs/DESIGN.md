@@ -16,7 +16,8 @@ and the hands (files, apps, system, headed browser).
 
 ## Hardware / models
 
-- Consumer laptop with a mid-range GPU, memory-constrained, Python 3.11, Ollama.
+- Consumer laptop with a mid-range GPU; memory-constrained, so only one model
+  is resident at a time. Python 3.11, Ollama.
 - `qwen3:8b` — main brain (supports tool calling in Ollama).
 - `qwen2.5vl:3b` — vision model for scene description.
 - YOLOv8n (ultralytics, CPU) — fast person detection for watch mode.
