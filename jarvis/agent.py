@@ -13,6 +13,7 @@ import ollama
 
 from .config import DESKTOP, HOME
 from . import mind as mind_module
+from . import plaintext
 from .tools import lessons as lesson_store
 from .tools import memory as memory_store
 from .tools import reminders as reminder_store
@@ -363,6 +364,12 @@ class Agent:
         self.messages[0] = {"role": "system", "content": self.base_prompt + preamble}
 
     def chat(self, user_text: str, status=lambda s: None) -> str:
+        """Answer one turn. The reply is normalised to plain speakable text --
+        the model typesets maths in LaTeX whatever the mind says, and every
+        reply is read aloud."""
+        return plaintext.to_plain(self._chat(user_text, status))
+
+    def _chat(self, user_text: str, status=lambda s: None) -> str:
         with self.lock:
             self.last_tools = []
             self._refresh_memory()

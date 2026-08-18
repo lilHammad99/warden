@@ -4056,6 +4056,77 @@ def t_reminders():
     shutil.rmtree(_remdir, ignore_errors=True)
 
 
+def t_plaintext():
+    """Exercises the reply normaliser: the 8B model typesets maths in LaTeX
+    even though the mind forbids markdown, and the reply is spoken aloud, so
+    TeX has to become plain prose. No model needed, so it lives in the safe
+    set. The guard must be conservative -- Windows paths, file names with
+    underscores and prices in dollars all survive untouched."""
+    from jarvis import plaintext
+
+    def latex_becomes_prose():
+        # the three real replies observed from qwen3:8b
+        out = plaintext.to_plain(
+            r"The calculation $ \frac{15}{100} \times 240 $ results in 36.")
+        assert "$" not in out and "\\" not in out, out
+        assert "15/100 times 240" in out, out
+
+        out = plaintext.to_plain(r"The calculation $7 \times 89 = 623$ is correct.")
+        assert "7 times 89 = 623" in out, out
+
+        out = plaintext.to_plain(r"The result of $2^{10}$ is **1024**.")
+        assert "2^10" in out and "**" not in out, out
+        return "LaTeX renders as speakable prose"
+    check("plaintext latex becomes prose", latex_becomes_prose)
+
+    def other_tex_delimiters():
+        assert plaintext.to_plain(r"It is \(x + 1\) exactly.") == "It is x + 1 exactly."
+        assert plaintext.to_plain(r"Result: \[a - b\]") == "Result: a - b"
+        return "\\( \\) and \\[ \\] delimiters removed"
+    check("plaintext other tex delimiters", other_tex_delimiters)
+
+    def commands_translated():
+        assert "square root of 144" in plaintext.to_plain(r"$\sqrt{144}$ is 12")
+        assert "approximately" in plaintext.to_plain(r"$\pi \approx 3.14$")
+        assert "divided by" in plaintext.to_plain(r"$10 \div 2$")
+        return "sqrt/approx/div translated"
+    check("plaintext commands translated", commands_translated)
+
+    def windows_paths_survive():
+        # the whole app talks about file paths; a backslash is NOT always TeX
+        for path in (r"Saved to C:\Users\MY-PC\Desktop\notes.txt",
+                     r"Moved to C:\Users\Alex\Documents\taxes\2026",
+                     r"C:\times\fraction\left.txt"):
+            assert plaintext.to_plain(path) == path, path
+        return "Windows paths untouched"
+    check("plaintext windows paths survive", windows_paths_survive)
+
+    def prices_and_underscores_survive():
+        # a lone $ is money, not a math delimiter
+        assert plaintext.to_plain("That costs $20, sir.") == "That costs $20, sir."
+        assert plaintext.to_plain("$20 today and $30 tomorrow.") == "$20 today and $30 tomorrow."
+        # underscores are file names, not emphasis
+        assert plaintext.to_plain("Opened my_budget_2026.xlsx.") == "Opened my_budget_2026.xlsx."
+        return "prices and underscores untouched"
+    check("plaintext prices and underscores survive", prices_and_underscores_survive)
+
+    def ordinary_text_untouched():
+        for s in ("It is 7:14 PM on Tuesday, sir.",
+                  "I couldn't find that file, sir.",
+                  "The weather in Lisbon is sunny, 27C."):
+            assert plaintext.to_plain(s) == s, s
+        return "plain replies pass through unchanged"
+    check("plaintext ordinary text untouched", ordinary_text_untouched)
+
+    def junk_shapes():
+        assert plaintext.to_plain("") == ""
+        assert plaintext.to_plain(None) == ""
+        assert plaintext.to_plain(1234) == "1234"
+        assert isinstance(plaintext.to_plain(r"$\frac{1}{2}$"), str)
+        return "empty/None/non-string handled, never raises"
+    check("plaintext junk shapes", junk_shapes)
+
+
 def t_dispatch():
     """Exercises the self-correcting tool dispatcher: hallucinated tool names,
     junk argument shapes, extra/missing arguments. No model needed, so it lives
@@ -5948,6 +6019,7 @@ SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
             "textextract": t_textextract,
             "spreadsheet": t_spreadsheet, "jsondata": t_jsondata,
             "convertdata": t_convertdata,
+            "plaintext": t_plaintext,
             "reminders": t_reminders, "dispatch": t_dispatch, "agent": t_agent,
             "camera": t_camera, "vision": t_vision, "tts": t_tts,
             "hud": t_hud, "watch": t_watch, "e2e": t_e2e}
@@ -5972,6 +6044,7 @@ if __name__ == "__main__":
         t_textextract()
         t_spreadsheet(); t_jsondata(); t_convertdata()
         t_writers()
+        t_plaintext()
         t_reminders(); t_dispatch()
     else:
         SECTIONS[which]()
