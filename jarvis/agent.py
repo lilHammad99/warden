@@ -5,27 +5,23 @@ call tools; tool results are fed back until it produces a final answer.
 """
 
 import json
+import re
 import threading
+from datetime import datetime
 
 import ollama
 
 from .config import DESKTOP, HOME
+from . import mind as mind_module
+from .tools import lessons as lesson_store
 from .tools import memory as memory_store
 from .tools import reminders as reminder_store
 from .tools import tasks as task_list
 from .tools import registry
 
-SYSTEM_PROMPT = f"""You are Jarvis, a local AI assistant running on the user's Windows PC,
-inspired by Iron Man's J.A.R.V.I.S. Address the user as "sir".
+SYSTEM_PROMPT = f"""Your identity and how you think are described above. Below
+are the rules for using your tools.
 
-Rules:
-- Be concise. Answers are often spoken aloud, so keep replies short and
-  natural. No markdown, no emojis, no bullet lists unless asked.
-- Be genuinely helpful and resourceful, like a sharp human assistant. If one
-  tool or approach doesn't get the answer, try another before giving up. Only
-  say you can't do something AFTER you have actually tried, and then say briefly
-  what you CAN do instead. Lead with the answer. Never claim you did something,
-  or invent a fact, that you did not actually get from a tool.
 - You have tools. USE them to actually do things instead of explaining how.
   When asked to write a file/essay/note, call write_file with the FULL text.
   But when the user wants it AS A PDF -- a CV/resume, cover letter, report or
@@ -35,11 +31,26 @@ Rules:
   spreadsheet/workbook ("as excel", "as a spreadsheet", ".xlsx") call create_xlsx
   with content as rows of comma-separated values (first row = headers). write_file
   produces a .pdf/.docx/.xlsx that won't open.
+- To CHANGE part of a file that already exists ("change the port to 8080", "fix
+  that typo", "rename that function", "update the version") call edit_file with
+  the file path, the exact existing text as 'old', and the replacement as 'new'
+  -- do NOT rewrite the whole file with write_file, which would risk losing the
+  rest of it. Read the file first so 'old' matches exactly. Use write_file only
+  to CREATE a new file or deliberately replace all of one, and append_file to add
+  to the end.
 - The user's home folder is {HOME} and their Desktop is {DESKTOP}.
 - "start working" or "watch the camera" means: call start_working.
   "stop working" means: call stop_working.
   "what do you see" means: call describe_view.
 - If a tool returns an error, tell the user briefly what went wrong.
+- Shutting down: if the user tells you to shut down, power off, turn yourself
+  off, go to sleep, stand down, sign off, quit, or that that's all for now,
+  call shutdown_jarvis. It closes the Jarvis program only -- it does NOT turn
+  off or restart the PC, so never use it for "shut down my computer". Say a
+  brief goodbye in your reply; you will finish speaking before closing.
+- When you need something back from the user, it is fine to end your reply with
+  a short question -- when voice is on, the mic stays open briefly so they can
+  answer without saying "Hey Jarvis" again.
 - Weather: for ANY weather question ("what's the weather like", "is it going to
   rain today", "how hot is it", "weather in London"), call get_weather -- NOT
   web_search, which returns page descriptions, not real conditions. Pass a
@@ -57,6 +68,27 @@ Rules:
 - For questions about this PC's network or running programs (IP address,
   whether the internet is up, what's running), use run_command with a safe
   command like ipconfig, ping, or tasklist.
+- Running/building/testing code: when the user wants you to actually RUN a
+  script, run tests, install a package, or check a project you have been
+  working on ("run my script", "run the tests", "does it work", "pip install
+  requests", "npm install", "git status"), call run_project_command with
+  command (e.g. 'pytest' or 'python app.py') and directory (the project folder,
+  under the user's home). It runs the command in that folder and returns the
+  output, any errors, and the exit code, so you can SEE whether it worked and
+  fix it if it failed -- do not claim code runs until you have actually run it.
+  Only build/dev tools are allowed (python, pip, pytest, node, npm, git, and
+  similar). This is different from run_command, which only inspects the PC
+  (ipconfig/ping/tasklist) and cannot run your code. It won't push or publish to
+  a remote; the user should do that themselves.
+- Long-running commands (BACKGROUND): if a command may take a while or never
+  exits on its own -- a slow 'pip install'/'npm install', a long test suite, or
+  a dev server like 'npm run dev' or 'python -m http.server' -- do NOT use
+  run_project_command (it would block until the command ends). Call
+  start_background_command with the same command and directory; it returns a job
+  id at once. Later, call check_background_command with that id to see the output
+  and whether it finished, and stop_background_command to end it (e.g. to stop a
+  dev server). Use run_project_command only for quick commands whose result you
+  need right now.
 - Math: for ANY arithmetic or calculation (sums, percentages, roots, etc.),
   call calculate with the expression instead of working it out yourself; it is
   always exact, and your own mental math is not.
@@ -141,7 +173,16 @@ Rules:
   spreadsheet", "read my CV"), call find_files. To find WHICH file contains some
   text, or information the user saved but can't locate ("which note has the wifi
   password", "find where I wrote about the budget"), call search_files with the
-  text. find_files searches names; search_files searches file contents. To find
+  text. find_files searches names; search_files searches file contents. To
+  search CODE for a regular expression -- to navigate a codebase before editing
+  it (where a function or class is defined, every call to something, all the
+  TODO/FIXME notes, an import): "where is run_project defined", "find every use
+  of set_volume", "grep for TODO in my project" -- call search_code with pattern
+  (a word or a regex like 'def run_project' or 'TODO|FIXME'), optionally folder
+  (the project folder) and glob (a file filter like '*.py' or 'src/**/*.js'). It
+  returns each matching file with the line number and line, so you can then open
+  or edit_file the right spot. search_code is a REGEX over code contents;
+  search_files is a plain substring for notes/documents. To find
   what the user changed or worked on RECENTLY, or to reopen the file they were
   just editing ("what did I work on today", "open the file I was just editing"),
   call recent_files (optionally with days, a folder, or a name pattern); it
@@ -228,11 +269,47 @@ Rules:
 MAX_TOOL_ROUNDS = 8
 MAX_SAME_TOOL = 3  # a small model can thrash one tool; cap it per turn
 
+_JSON_OBJ_RE = re.compile(r"\{.*\}", re.S)
+
+
+def _tool_call_in_text(content):
+    """A local model sometimes WRITES its tool call instead of making one, so
+    the reply arrives as text with no tool_calls. Return (name, args) when
+    ``content`` is such a call, else None; the caller runs it rather than
+    handing the user raw JSON -- which in voice mode gets read aloud."""
+    if not content or "{" not in content:
+        return None
+    match = _JSON_OBJ_RE.search(content)
+    if not match:
+        return None
+    try:
+        obj = json.loads(match.group(0))
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    name = obj.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    args = obj.get("arguments", obj.get("parameters", {}))
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            args = {}
+    if not isinstance(args, dict):
+        return None
+    return name, args
+
 
 class Agent:
     def __init__(self, model: str):
         self.model = model
-        self.messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # the mind (identity + how-to-think) is loaded once per session and sits
+        # at the very front of the system message; the tool rules follow it
+        self.mind = mind_module.load_mind()
+        self.base_prompt = self.mind + "\n\n" + SYSTEM_PROMPT
+        self.messages: list[dict] = [{"role": "system", "content": self.base_prompt}]
         self.lock = threading.Lock()  # console + voice threads share one brain
         self.last_tools: list[str] = []  # tools used in the most recent chat()
 
@@ -254,12 +331,27 @@ class Agent:
             )
 
     def _refresh_memory(self) -> None:
-        """Rebuild the system message so freshly remembered facts are visible
-        immediately. Defensive: a memory failure must never break chat."""
+        """Rebuild the system message so freshly remembered facts and learned
+        lessons are visible immediately. Order after the mind + tool rules:
+        facts, then lessons, then tasks, then reminders. Defensive: any single
+        store failing must never break chat."""
+        # state the date outright: told only to "call today", the model builds
+        # date strings from a guessed year (it produced 2023-11-01 in 2026)
+        now = datetime.now()
+        preamble = (
+            f"\n\nRight now it is {now.strftime('%A, %d %B %Y')} at "
+            f"{now.strftime('%I:%M %p').lstrip('0')} "
+            f"(today is {now.strftime('%Y-%m-%d')}). Use this date and time as "
+            "fact; never guess the year when you build a date.\n"
+        )
         try:
-            preamble = memory_store.memory_preamble()
+            preamble += memory_store.memory_preamble()
         except Exception:
-            preamble = ""
+            pass
+        try:
+            preamble += lesson_store.lessons_preamble()
+        except Exception:
+            pass
         try:
             preamble += task_list.tasks_preamble()
         except Exception:
@@ -268,7 +360,7 @@ class Agent:
             preamble += reminder_store.reminders_preamble()
         except Exception:
             pass
-        self.messages[0] = {"role": "system", "content": SYSTEM_PROMPT + preamble}
+        self.messages[0] = {"role": "system", "content": self.base_prompt + preamble}
 
     def chat(self, user_text: str, status=lambda s: None) -> str:
         with self.lock:
@@ -280,19 +372,32 @@ class Agent:
             turn_tools = registry.specs_for(user_text)
             seen: dict[str, str] = {}  # (tool + args) -> result, to catch repeats
             name_counts: dict[str, int] = {}  # per-tool call count this turn
+            results_seen: set[str] = set()  # every result handed back this turn
             for _ in range(MAX_TOOL_ROUNDS):
                 response = self._call_model(self.messages, tools=turn_tools)
                 msg = response["message"]
                 tool_calls = msg.get("tool_calls")
                 if not tool_calls:
                     content = (msg.get("content") or "").strip()
-                    self.messages.append({"role": "assistant", "content": content})
-                    self._trim_history()
-                    return content or "Done, sir."
+                    written = _tool_call_in_text(content)
+                    if written and written[0] in registry._TOOLS:
+                        tool_calls = [{"function": {"name": written[0],
+                                                    "arguments": written[1]}}]
+                    elif not content and self.last_tools:
+                        # it ran tools then went quiet; the answer is sitting in
+                        # the tool results, so ask for it rather than fobbing
+                        # the user off with "Done, sir."
+                        return self._final_answer()
+                    else:
+                        self.messages.append(
+                            {"role": "assistant", "content": content})
+                        self._trim_history()
+                        return content or "Done, sir."
                 self.messages.append(
                     {"role": "assistant", "content": msg.get("content") or "",
                      "tool_calls": tool_calls}
                 )
+                wrap_up = False  # a guard fired: answer now, don't keep looping
                 for call in tool_calls:
                     fn = call["function"]
                     name = fn["name"]
@@ -315,6 +420,20 @@ class Agent:
                             "times this turn. Stop calling it and answer the "
                             "user directly now with what you already have."
                         )
+                        # left in the loop it answers ABOUT the push-back
+                        # ("I have already counted the words") instead of
+                        # answering the question, so end the turn here
+                        wrap_up = True
+                    elif any(isinstance(v, str) and v.strip() in results_seen
+                             for v in args.values()):
+                        # it passed a tool's own output back into the tool
+                        # (counting the word count); refuse and make it answer
+                        result = (
+                            f"That is {name}'s own output from this turn, not "
+                            "something to measure again. Use the result you "
+                            "already have and answer the user."
+                        )
+                        wrap_up = True
                     elif sig in seen:
                         # the model is repeating an identical call; don't run it
                         # again — push back so it changes course or just answers
@@ -327,17 +446,23 @@ class Agent:
                     else:
                         result = registry.dispatch(name, args)
                         seen[sig] = result
+                    if isinstance(result, str) and result.strip():
+                        results_seen.add(result.strip())
                     self.messages.append(
                         {"role": "tool", "content": result, "tool_name": name}
                     )
+                if wrap_up:
+                    return self._final_answer()
             # Out of tool rounds: force a plain answer instead of giving up, so a
             # tool-happy model still says something useful.
             return self._final_answer()
 
     def _final_answer(self) -> str:
         self.messages.append(
-            {"role": "user", "content": "Answer my last question now in one or "
-             "two short sentences, without using any tools."}
+            {"role": "user", "content": "Now answer my original question in one "
+             "or two short sentences, using the tool results above. State the "
+             "actual figures. Do not describe what you did, do not mention "
+             "tools, and do not ask me for anything."}
         )
         try:
             response = self._call_model(self.messages)  # no tools: force a reply

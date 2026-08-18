@@ -17,7 +17,10 @@ class Transcriber:
         self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
         self.language = language
 
-    def record_utterance(self, on_level=None) -> np.ndarray | None:
+    def record_utterance(self, on_level=None, onset_timeout: float = 5.0) -> np.ndarray | None:
+        """Record until silence. Give up (return None) if nobody starts
+        speaking within ``onset_timeout`` seconds -- longer for a follow-up
+        window where we wait for the user to answer without a wake word."""
         frame_len = int(SAMPLE_RATE * FRAME_MS / 1000)
         chunks, started, silent_s, total_s = [], False, 0.0, 0.0
         with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
@@ -37,7 +40,7 @@ class Transcriber:
                     silent_s += FRAME_MS / 1000
                     if silent_s > SILENCE_AFTER_S:
                         break
-                elif total_s > 5.0:  # nobody spoke
+                elif total_s > onset_timeout:  # nobody spoke
                     return None
         return np.concatenate(chunks) if started else None
 
@@ -47,8 +50,8 @@ class Transcriber:
         )
         return " ".join(s.text.strip() for s in segments).strip()
 
-    def listen(self, on_level=None) -> str:
-        audio = self.record_utterance(on_level=on_level)
+    def listen(self, on_level=None, onset_timeout: float = 5.0) -> str:
+        audio = self.record_utterance(on_level=on_level, onset_timeout=onset_timeout)
         if audio is None:
             return ""
         return self.transcribe(audio)

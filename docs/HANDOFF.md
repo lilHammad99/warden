@@ -1112,6 +1112,260 @@ Results: safe set now 342 checks PASS; `network` and `system` both PASS. Still n
 automated guard for the browser_* tools (covered live in the audit + e2e) and the
 camera tools (covered by the camera/vision sections + the new None-manager guard).
 
+## 2026-08-01 — Edit part of a file without rewriting it (Phase 44)
+
+Added `edit_file` (`jarvis/tools/edit.py`): a core CODE-BUILDING capability and
+the missing verb in the write family. Until now the only way to CHANGE something
+already in a file was `write_file`, which overwrites the WHOLE file -- so the 8B
+model had to reproduce every other line perfectly or silently lose the rest. For
+a small local model iterating on code/config/notes that is a real hazard. This is
+Claude Code's own Edit tool: find an exact piece of text and replace it, leaving
+everything else untouched. Answers "change the port to 8080 in my config", "fix
+that typo", "rename that function", "update the version number".
+- Args `path` + `old` (exact existing text) + `new` (replacement; empty `new`
+  DELETES the old text) + optional `replace_all`. The `old` text must appear
+  EXACTLY: 0 matches -> friendly "couldn't find that text" (file untouched);
+  >1 match without `replace_all` -> REFUSED as ambiguous with the count, so a
+  single hallucinated match can never rewrite the wrong line. Pure stdlib, NO new
+  dependency.
+- Reuses `organize._resolve_under_home` for containment (a path outside home,
+  incl. a `..`-escape, is REJECTED -> can't edit `C:\Windows`) and
+  `fileinfo._is_binary` (binary by extension OR NUL-byte sniff refused, so an
+  edit can't corrupt an image/archive/Office doc). A missing file is steered to
+  write_file; a folder is refused. **Newline-preserving**: matching is done on
+  \n-normalised text (read_file shows the model \n) but the file's original CRLF
+  endings are restored on write, so an edit doesn't reflow a whole file. **Atomic
+  write** (`.part` temp then `os.replace`) so a failure never truncates the file.
+  Bounded: file 5 MB, old/new 100k chars each (over-cap refused, not truncated).
+  Forgiving arg names (`file`/`find`/`replace`/`old_string`/`new_string`/...),
+  wrong-type/empty/missing args coerced or rejected, output pure ASCII. Never
+  raises.
+- Added to registry `_CORE` (always offered, a peer of write_file/read_file) so
+  the router surfaces it for any edit request. Wired into `app.py` imports
+  (`from .tools import edit`) + the console "Try:" line ("change the port to 8080
+  in my config.txt"), and the agent system prompt (edit_file to CHANGE part of an
+  existing file, NOT write_file which risks losing the rest; write_file only to
+  CREATE, append_file to add to the end).
+- `tests/smoke.py edit` (safe set, pid/uuid-tagged sandbox): single exact
+  replacement (rest of file intact), empty-`new` deletion, ambiguous-refused +
+  replace_all, not-found (file untouched), CRLF preservation, alt arg names,
+  old==new no-op, binary refused, missing-file steer to write_file, containment
+  (absolute + `..`-escape), folder refused, ASCII-only, the size cap, and the
+  empty/missing/wrong-type guards. Full safe set: 357 checks, all PASS. Verified
+  end-to-end: the router offers edit_file for "change the port..." and a real
+  dispatch edited a real file, changing only the target line. No new dependency.
+  72 tools without browser (78 with).
+
+## 2026-08-01 — Run/build/test code in a project folder (Phase 45)
+
+Added `run_project_command` (`jarvis/tools/runner.py`): the biggest missing
+CODE-BUILDING verb. Jarvis could already write and edit files but could NEVER
+RUN them, so it couldn't tell whether the code it produced actually works -- the
+core thing Claude Code does. Now it runs a real build/dev command inside a
+project folder and gets back the stdout, stderr and exit code, so it can run a
+script, run tests, install a package or check a repo and SEE the result ("run my
+script", "run the tests", "does it work", "pip install requests", "npm install",
+"git status"). This is the counterpart to `run_command` (shell.py), which stays
+strictly for read-only PC inspection (ipconfig/ping/tasklist) and cannot run the
+user's code. Pure stdlib, NO new dependency.
+- Args `command` (e.g. 'pytest' or 'python app.py') + `directory` (the project
+  folder, under home; defaults to home) + optional `timeout`. The command is
+  parsed into a fixed argv (`shlex`, `posix=False` so Windows backslashes and
+  quoted args survive) and run with `subprocess.run(shell=False, cwd=proj)`.
+  Output is reported as a readable, bounded, pure-ASCII summary (status + exit
+  code + Output/Errors), each stream capped at 4000 chars.
+- Safety, layered (an 8B model WILL emit junk): (1) **scoped to home** --
+  reuses `organize._resolve_under_home`, so cwd outside home / a `..`-escape is
+  REJECTED (can't run in `C:\Windows`); (2) **allowlist of build/dev tools
+  only** (python/pip/pytest/node/npm/npx/yarn/git/go/cargo/java/dotnet/make/...);
+  anything else refused with the list; (3) **no shell** -- `&`, `|`, `>`, `;`
+  become inert arguments, never a second command (real injection-inert smoke
+  test: `python --version & del hello.py` leaves the file intact); (4) **no
+  path-y exe** -- a first token with a slash (`.\evil.exe`) is refused; the
+  program must resolve on PATH via `shutil.which` (so `npm` finds `npm.cmd`);
+  (5) **outward-facing publish/push blocked** (`git push`, `npm publish`,
+  `cargo publish`, ...) since a deploy should be the user's deliberate act;
+  (6) **bounded** -- timeout coerced+clamped (default 120s, max 300s), no popup
+  window. Alt arg names (`cmd`/`dir`/`folder`/`project`/`cwd`/...), wrong-type/
+  empty/missing args coerced or rejected. Never raises.
+- Added to registry `_CORE` (a peer of write_file/read_file/edit_file, so the
+  router always offers it for a run/test/build request) and wired into `app.py`
+  imports (`from .tools import runner`), the console "Try:" line ("run the tests
+  in my project"), and the agent system prompt (run_project_command to actually
+  run/test code vs run_command which only inspects the PC; do not claim code
+  runs until it has been run; won't push/publish).
+- `tests/smoke.py runner` (new safe-set section, pid/uuid-tagged sandbox under
+  home, real subprocesses using this same Python): runs a script (stdout+exit),
+  reports a nonzero exit, captures stderr, allowlist refusal, shell-metacharacter
+  injection inert (no file deleted), path-exe refused, publish/push refused,
+  containment (absolute + `..`-escape), missing folder, an uninstalled allowed
+  tool, alt arg names + wrong-type + ASCII guards, and the timeout clamp. Full
+  safe set: 369 checks, all PASS. Verified end-to-end for real: the full build
+  loop make_folder -> write_file -> run_project_command produced correct live
+  output ("sum = 108"), and dispatch actually ran python/git and captured their
+  output/exit codes. No new dependency. NEXT best step: let the model run a
+  longer task in the BACKGROUND (start + poll) so a slow test/build/install
+  doesn't block the single-threaded turn, or capture combined interleaved
+  output for commands that stream progress.
+
+## 2026-08-01 — Run a command in the BACKGROUND (start + poll + stop) (Phase 46)
+
+Added `start_background_command` / `check_background_command` /
+`stop_background_command` (`jarvis/tools/background.py`): the increment Phase 45
+flagged as next. `run_project_command` runs a command and WAITS for it, which
+blocks Jarvis's single-threaded turn -- fine for a quick script, bad for a slow
+`pip install`/`npm install`, a long test suite, or a dev server (`npm run dev`,
+`python -m http.server`) that never exits. Jarvis can now kick a long job off,
+keep talking, and check back -- the way Claude Code runs a build in the
+background. Pure stdlib, NO new dependency.
+- **Reuses the runner's whole safety model, not a copy of it.** runner.py's
+  command+directory validation was refactored out into a shared
+  `_resolve_command_and_dir()` (plus a shared `_where()`), and BOTH
+  run_project_command and the background tools call it -- so the same defenses
+  apply: home-containment (a `..`-escape / `C:\Windows` REJECTED), the build/dev
+  allowlist, `shell=False` (metacharacters inert), no path-y exe, publish/push
+  refused, PATH resolution (`npm`->`npm.cmd`). run_project_command's 12 smoke
+  checks still pass unchanged after the refactor.
+- `start_background_command` launches via `subprocess.Popen` (stdin=DEVNULL, no
+  window) and returns a short job id AT ONCE. Output is drained off the process's
+  pipes by two daemon reader threads into a per-stream bounded `bytearray`
+  (`MAX_CAPTURE` 200 KB, overflow dropped + flagged), so a chatty command can
+  never deadlock on a full pipe or exhaust memory. Bounded elsewhere too:
+  `MAX_JOBS` (8) concurrent running jobs (a hallucination can't fork-bomb),
+  `MAX_LIFETIME` (30 min) after which a still-running job is auto-stopped, and
+  `MAX_FINISHED` (20) finished jobs retained for re-checking then pruned oldest-first.
+- `check_background_command` reports running/finished, exit code, elapsed time
+  and the (clipped, ASCII) output so far; with NO id it lists every job and its
+  state. `stop_background_command` terminates a running job (terminate -> kill
+  fallback); a manual stop and the lifetime auto-stop are worded distinctly, and
+  re-stopping a finished job is a friendly no-op. Alt arg names (`cmd`/`dir`/
+  `id`/`job`/...), wrong-type/empty/missing coerced or rejected. Never raises;
+  output pure ASCII.
+- `start`+`check` added to registry `_CORE` (always offered, peers of
+  run_project_command; core offer stays at 24, within the router cap); `stop` is
+  surfaced by keyword routing ("stop that background job"). Wired into `app.py`
+  imports (`from .tools import background`) + the console "Try:" line ("install
+  the packages in my project in the background"), and the agent system prompt
+  (use the background tools for a slow/never-exiting command; run_project_command
+  only when you need the result now).
+- `tests/smoke.py background` (new safe-set section, pid/uuid-tagged sandbox under
+  home, real subprocesses using this same Python): start+stream+finish (stdout AND
+  stderr captured), an in-progress poll showing "still running" + partial output,
+  a nonzero exit, stopping a never-ending "server" + the re-stop no-op, the job
+  listing + unknown-id guards, the shared runner defenses refused BEFORE launch
+  (allowlist/containment/path-exe/publish), the concurrent-job cap (via a
+  temporary `MAX_JOBS=1`), and the alt-name/wrong-type/empty/ASCII guards. Every
+  launched job is stopped in a `finally`. Full safe set: 377 checks, all PASS
+  (369 prior + 8). Verified end-to-end for real OUTSIDE the tests: a 3-tick
+  streaming script showed partial output while running then its exit code +
+  stderr on finish; a `while True` "server" was started, confirmed running, and
+  stopped. No new dependency. Adds 3 tools (start/check/stop_background_command).
+  NEXT best step
+  candidates: a `run_project_command`/background option to capture COMBINED
+  interleaved stdout+stderr (some tools only make sense interleaved), or a
+  code-search `grep`-style tool over a project folder (regex + file glob) so
+  Jarvis can navigate an unfamiliar codebase before editing it.
+
+## 2026-08-01 — Grep-style code search (regex + file glob) (Phase 47)
+
+Added `search_code` (`jarvis/tools/codesearch.py`): the code-navigation verb
+Phase 46 flagged as next, and the last major missing piece of Claude Code's
+core toolset. Jarvis could WRITE, EDIT and RUN code but had no way to SEARCH a
+codebase, so before editing an unfamiliar project it was navigating blind. This
+is Claude Code's own `Grep`: search file CONTENTS for a **regular expression**
+and get back each file with the line number and line ("where is run_project
+defined", "find every call to set_volume", "grep for TODO|FIXME", "find
+`import requests`"). It completes the finder trio -- `find_files` (by NAME),
+`search_files` (a plain substring, aimed at notes/documents), `search_code` (a
+REGEX + file glob, aimed at code). Pure stdlib (`re`/`fnmatch`), NO new dep.
+- One combined tool, not two: the glob facet is a `glob` argument that filters
+  WHICH files are grepped (`*.py`, several comma-separated, or a path glob like
+  `src/**/*.js` with real `**`-across-directories semantics via a small
+  `_glob_to_regex`). A standalone path-glob file lister would mostly duplicate
+  `find_files`, so it was deliberately folded in here instead.
+- Reuses the existing safety model wholesale: `find._resolve_root`
+  (home-containment -- a folder outside home / a `..`-escape is REJECTED, can't
+  grep `C:\Windows`), `find._SKIP_DIRS` (.git/node_modules/venv/AppData pruned),
+  `find._coerce`, and `search._BINARY_EXTS`/`_looks_binary`/`_ascii` (binary by
+  extension AND NUL-byte sniff skipped, matched lines forced to bounded
+  single-line ASCII). Bounded on depth (12, deeper than the doc tools), files
+  read, entries scanned, matches (total + per file), 2 MB/file cap and a 10 s
+  wall-clock budget -- a pathological or catastrophic-backtracking pattern stops
+  early with a note. A file over the budget stops, never hangs.
+- Forgiving to 8B quirks, never raises: an INVALID regex (a stray `(`) is retried
+  as literal text and the reply says so, so it self-corrects instead of dead-
+  ending; `case_sensitive` (default off) honored; alt arg names
+  (`query`/`regex`/`text` for pattern, `file`/`files`/`name`/`include` for glob,
+  `dir`/`directory`/`project`/`path` for folder); a bare `*` glob = no filter;
+  wrong-type/empty/missing args coerced or answered. Results show the absolute
+  path + `lineno: line`, ready to hand straight to read_file/edit_file.
+- Added to registry `_CORE` (a peer of write_file/read_file/edit_file/
+  run_project_command) so the router always offers it -- necessary because
+  `_CORE` already fills the router's per-turn limit, so a non-core tool is
+  effectively never surfaced. Real-app offer is now 25 tools (was 24). Wired
+  into `app.py` imports (`from .tools import codesearch`) + the console "Try:"
+  line ("search my code for the run_project function"), and the agent system
+  prompt (search_code = REGEX over code to navigate before editing, vs
+  search_files = plain substring for notes; results feed read_file/edit_file).
+- `tests/smoke.py codesearch` (new safe-set section, pid/uuid-tagged sandbox
+  project under home): a regex definition match with line number (a bare call in
+  another file correctly excluded), an alternation regex across files, the `*.py`
+  glob excluding a `.txt`, a recursive `src/**/*.py` path glob reaching only the
+  nested file, case-insensitive default vs `case_sensitive`, node_modules pruned
+  + a `.pyc` binary skipped, the invalid-regex->literal fallback, ASCII-only
+  output, containment (absolute + `..`-escape), alt arg names, the router
+  actually offering search_code for a code query, and the empty/missing/
+  wrong-type/bare-`*`/missing-folder guards. Full safe set: 390 checks, all PASS
+  (377 prior + 13). Verified end-to-end for real OUTSIDE the tests: a regex
+  search over this actual Jarvis codebase located `def _resolve_under_home`
+  (organize.py:82) and `@tool(` (codesearch.py:157), returning absolute paths.
+  No new dependency. 78 tools without browser (84 with). NEXT best step
+  candidates: an optional context-lines (`-C`) window around each match, or a
+  standalone glob file-lister if `find_files`'s basename-only matching proves
+  too weak for `**`-style project queries.
+
+## 2026-08-01 — Context lines around a code-search match (Phase 48)
+
+Refined `search_code` (`jarvis/tools/codesearch.py`) with an optional `context`
+(grep's `-C`) argument -- the refinement Phase 47 flagged as next. Before this,
+a match came back as a lone `lineno: line`, so to see the code AROUND a hit
+(the whole function, the lines it depends on) Jarvis had to make a second
+`read_file` round-trip. Now one search can show the surrounding lines, so the
+search -> read -> edit loop needs one fewer step before an edit. Pure stdlib,
+NO new dependency.
+- `context` = how many lines to show on each side of every match (default 0 =
+  today's behaviour, unchanged). A matched line is rendered `lineno: line` and a
+  context line `lineno- line` (grep's `:` vs `-` convention); overlapping or
+  adjacent windows are MERGED and separate groups divided by a `--` line, so
+  consecutive matches don't repeat lines and distant ones read clearly.
+- Bounded + forgiving like the rest: `context` coerced from junk/wrong-type to 0
+  and clamped to `MAX_CONTEXT` (10) so one hallucinated huge value can't blow up
+  the output; alt arg names (`context_lines`/`around`/`C`/`lines`); at most
+  `MAX_MATCHES_PER_FILE` (8) matches per file are expanded, and the existing
+  `MAX_RESULTS`/time/size caps still bound the whole reply. Context path reads
+  the (already <=2 MB) file's lines once; context lines go through the same
+  `_ascii` sanitiser, so output stays pure single-line ASCII. Never raises.
+- Default behaviour is byte-for-byte unchanged (context defaults to 0), so all
+  13 prior codesearch checks pass untouched. Schema + tool description gained the
+  `context` field so the model knows to reach for it before an edit.
+- `tests/smoke.py codesearch` gains a context check: `context=1` shows the `-`
+  context line above and below plus the `:` match line (and the surrounding
+  `return x` that a plain search does NOT pull in), the `context_lines` alt name,
+  and the clamp of a 9999 value -- still ASCII. Full safe set: 391 checks, all
+  PASS (390 prior + 1). Verified end-to-end for real OUTSIDE the tests: a
+  `context=2` search over this actual codebase showed `def _resolve_under_home`
+  (organize.py:82) with its 2 lines of surrounding code each side, and a
+  multi-match `context=1` search correctly MERGED adjacent hits and divided
+  distant groups with `--`. No new dependency.
+- Note on scope this cycle: git status/diff/log/add/commit are ALREADY runnable
+  via `run_project_command` (git is on its allowlist; only push/publish is
+  blocked), so a dedicated git wrapper would have been largely redundant -- the
+  context-lines refinement was the higher marginal value. NEXT best step
+  candidates: a `web_fetch` (plain HTTP GET + HTML-to-text, local-only, for docs
+  lookup) as a genuinely NEW capability, or a project scaffolder (one call to
+  create a runnable python/node starter) as a convenience over
+  make_folder+write_file+run_project_command.
+
 ## How to test (in order)
 
 ```
@@ -1179,3 +1433,73 @@ desktop...`, `start working`, `what do you see`, voice "Hey Jarvis".
 3. Update ROADMAP.md checkboxes + HANDOFF.md as things pass
 4. Write Claude memory files (project + user preferences) per memory rules
 5. Tell the user how to start Jarvis (`run.bat`) and what to try
+
+## 2026-08-18 — Second model bake-off (bigger brain REJECTED again) + 4 agent-loop fixes
+
+the user asked for "a much bigger model even if that makes him slower". Measured it
+properly instead of assuming, and the answer is the same as 2026-07-31: on this
+box a bigger brain is slower and NOT smarter. Config unchanged: still `qwen3:8b`.
+
+Bake-off through the REAL Agent (mind + router + 88 tools), 8 questions, one
+model at a time on an idle box (memory-constrained dev laptop):
+- `qwen3:8b` -- **6/8, 188 s**
+- `qwen3:14b` -- **6/8, 341 s** (same accuracy, 1.8x slower; 98 s on one question)
+- `gpt-oss:20b` -- **2/8, 239 s**. With `think=False` Ollama returns 500
+  `error parsing tool call` (gpt-oss needs its Harmony channel). `think='low'`
+  stops the crashes (2/4); `think=True` is worse (0/4) and it answers from
+  stored memory instead of the question. Its ONE tool-free reasoning answer was
+  right and the fastest result of the whole exercise (11.7 s vs 19 s) -- the MoE
+  speed thesis held, the format compatibility did not. Not viable without
+  rewriting the 14 KB system prompt for a second model's conventions.
+
+KEY FINDING: all three models failed the SAME two questions. A failure shared by
+an 8B, a 14B and a 21B MoE is a harness bug, not a brain problem. Fixes (TDD,
+new `tests/smoke.py agentguard` section, 9 checks, in the safe set):
+- `agent.py` `_tool_call_in_text()` + use in `chat()`: when the model WRITES its
+  tool call as text instead of making one, run it instead of handing the user
+  raw JSON. Previously `{"name": "count_words", ...}` was returned verbatim --
+  and in voice mode SPOKEN aloud.
+- `agent.py` self-feeding guard (`results_seen`): the model fed `count_words` its
+  own output back ("count the word count"), which the (tool+args) dedupe missed
+  because the args differed each round. Now refused.
+- `agent.py` `wrap_up`: when a guard fires, end the turn via `_final_answer()`
+  instead of looping. Left running, the model answers ABOUT the push-back ("I
+  see, if you have already used the count_words function...") instead of
+  answering. Also `_final_answer()` now demands the actual figures.
+- `agent.py` `_refresh_memory()` now states today's date in the system message.
+  Told only to "call today", the model built dates from a guessed year (it
+  produced `2023-11-01` in 2026).
+- `dates.py`: `date_add` description now says it does NOT count days between two
+  dates; `days_until` says it is the only correct way to count from today.
+- `textstats.py` `_strip_counting_request()`: ignores a "how many words ...:"
+  preamble the model may pass along with the text. NOTE: this fixed a slip that
+  was MISDIAGNOSED -- the observed 24-word answer came from the self-feeding bug,
+  not from a bad argument. Kept because it is narrowly gated and tested, in the
+  same spirit as the existing `_looks_like_path` guard.
+
+- `memory.py` `_is_transient()`: `remember` now REFUSES a "fact" that just
+  restates the current moment. Handed get_time/today/get_weather output the
+  model called `remember` with it ("Today is Tuesday, 18 August 2026, 06:19
+  PM"), which is false by tomorrow, crowds out real facts, and derailed the
+  reply into "Done, sir.". Five such junk facts were cleaned out of the real
+  store with `forget`. Durable facts that merely MENTION a date or the weather
+  ("Alex's birthday is on 12 March", "Alex hates cold weather") still store.
+  The tool description now also says never to store what another tool just
+  returned -- after which the real app answered time AND weather without
+  calling `remember` at all.
+
+Result: word count went from broken in EVERY pre-fix run to correct in 3 of 3
+post-fix runs ("...contains 9 words."). No raw JSON reached the user in any run.
+Safe suite green throughout. Run-to-run variance is high (5/8-7/8 across four
+post-fix runs), so judge changes on repeated runs, not one.
+
+STILL BROKEN (genuine 8B limits, not harness): "how many days between today and
+the 1st of November" -- it answers 84, or calls `days_between` with the year
+2023, even with today's date in the prompt. The TOOLS are right (`days_until`
+and `days_between` both return the correct 75). Occasional meta-narration leaks
+("The user asked for a unit conversion, and I already provided...").
+
+OPERATIONAL: the Ollama server DIED silently mid-session while cycling the 13 GB
+gpt-oss model on the dev machine, which looks exactly like "Jarvis broke".
+20B-class models are memory-unsafe here. `gpt-oss:20b` and `qwen3:14b` were
+removed after the bake-off to reclaim 22.3 GB.

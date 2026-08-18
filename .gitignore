@@ -11,4 +11,8 @@ data/tasks.corrupt.json
 data/reminders.json
 data/reminders.tmp
 data/reminders.corrupt.json
+data/lessons.json
+data/lessons.tmp
+data/lessons.corrupt.json
 yolov8n.pt
+models/piper/

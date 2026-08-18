@@ -1,6 +1,6 @@
 """Smoke tests: run with  .venv\\Scripts\\python -m tests.smoke [section]
-Sections: imports, tools, memory, writers, shell, find, search, recent, organize,
-movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
+Sections: imports, tools, memory, lessons, mind, writers, shell, runner, background, find, search, codesearch, recent, organize,
+movefolder, copyfolder, makefolder, duplicates, fileinfo, compare, edit, disk, document, pdf, excel, explorer, archive, extract, recycle, clipboard, tasks, calc,
 dates, convert, textstats, numstats, password, textcodec, textextract, spreadsheet, jsondata, convertdata, reminders, dispatch, agent, camera, vision, tts, hud, watch,
 e2e, all
 Live sections needing internet/hardware (run explicitly, NOT in the safe set):
@@ -29,8 +29,8 @@ def check(name, fn):
 
 def t_imports():
     def _all():
-        from jarvis import agent, app, config  # noqa
-        from jarvis.tools import apps, archive, browser, calc, camera, clipboard, compare, convert, dates, disk, document, duplicates, excel, explorer, extract, fileinfo, files, find, jsondata, makedocx, makepdf, makexlsx, memory, numstats, organize, password, pdf, recent, recycle, registry, reminders, search, shell, spreadsheet, system, tasks, textcodec, textextract, textstats, weather, web  # noqa
+        from jarvis import agent, app, config, mind  # noqa
+        from jarvis.tools import apps, archive, background, browser, calc, camera, clipboard, codesearch, compare, convert, dates, disk, document, duplicates, edit, excel, explorer, extract, fileinfo, files, find, jsondata, lessons, makedocx, makepdf, makexlsx, memory, numstats, organize, password, pdf, recent, recycle, registry, reminders, runner, search, shell, spreadsheet, system, tasks, textcodec, textextract, textstats, weather, web  # noqa
         from jarvis.vision import cameras, describe, watcher  # noqa
         from jarvis.voice import loop, stt, tts, wake  # noqa
         return "all modules import"
@@ -103,6 +103,35 @@ def t_memory():
         return f"count still {mem.count()} (deduped)" if mem.count() == 1 \
             else (_ for _ in ()).throw(AssertionError("duplicate stored"))
     check("memory dedup", dedup)
+
+    def transient_refused():
+        """The model 'remembers' what a tool just told it -- the current time,
+        today's date, the weather. Those are false tomorrow, so refuse them."""
+        before = mem.count()
+        for junk in ("Today is Tuesday, August 18, 2026, 05:29 PM.",
+                     "The current time is 6:19 PM",
+                     "The weather in Lisbon, Portugal is sunny with a "
+                     "temperature of 27C"):
+            out = registry.dispatch("remember", {"fact": junk})
+            assert "Error" in out, (junk, out)
+        assert mem.count() == before, f"{mem.count()} != {before}"
+        return f"3 passing details refused, count still {before}"
+    check("memory refuses transient facts", transient_refused)
+
+    def durable_still_stored():
+        """The guard must not block ordinary durable facts that mention dates
+        or the weather in passing."""
+        before = mem.count()
+        assert "Remembered" in registry.dispatch(
+            "remember", {"fact": "Alex's birthday is on 12 March"})
+        assert "Remembered" in registry.dispatch(
+            "remember", {"fact": "Alex hates cold weather"})
+        # leave the store as we found it, so later checks see what they expect
+        registry.dispatch("forget", {"query": "birthday"})
+        registry.dispatch("forget", {"query": "cold weather"})
+        assert mem.count() == before, f"{mem.count()} != {before}"
+        return "durable facts still stored"
+    check("memory still stores durable facts", durable_still_stored)
 
     def hallucination_guards():
         # empty / whitespace / wrong-type args must NOT crash or store junk
@@ -181,6 +210,112 @@ def t_memory():
     shutil.rmtree(_memdir, ignore_errors=True)
 
 
+def t_lessons():
+    """Exercises the earned-lessons store + its defenses against 8B
+    hallucinations. Mirrors t_memory; no model needed, so it lives in the safe
+    set. Lessons are SEPARATE from user facts (memory.json)."""
+    from jarvis.tools import lessons as les
+    from jarvis.tools import registry
+
+    # isolate: unique per-run store DIR so overlapping smoke runs never collide
+    # (the fixed-name corrupt sidecar lessons.corrupt.json lands here too)
+    import tempfile, os, pathlib, shutil
+    _lesdir = tempfile.mkdtemp(prefix="jarvis_lessons_smoke_%d_" % os.getpid())
+    les._STORE = pathlib.Path(_lesdir) / "lessons.json"
+
+    def happy_path():
+        assert "Learned" in registry.dispatch(
+            "learn_lesson", {"lesson": "Use read_pdf for PDFs, not read_file"})
+        assert les.count() == 1
+        # the lesson shows up in the injected preamble, under its own heading
+        pre = les.lessons_preamble()
+        assert "read_pdf" in pre and "Lessons you have learned" in pre
+        return "learn/preamble ok"
+    check("lessons happy path", happy_path)
+
+    def dedup():
+        registry.dispatch("learn_lesson",
+                          {"lesson": "Use read_pdf for PDFs, not read_file"})
+        return f"count still {les.count()} (deduped)" if les.count() == 1 \
+            else (_ for _ in ()).throw(AssertionError("duplicate stored"))
+    check("lessons dedup", dedup)
+
+    def hallucination_guards():
+        # empty / whitespace / wrong-type args must NOT crash or store junk
+        assert "Error" in registry.dispatch("learn_lesson", {"lesson": "   "})
+        assert "Error" in registry.dispatch("learn_lesson", {"lesson": ""})
+        assert registry.dispatch("learn_lesson", {}).startswith(("Error", "Learned", "Already"))
+        assert "Error" in registry.dispatch("forget_lesson", {"query": ""})
+        registry.dispatch("learn_lesson", {"lesson": 123})  # coerced, no raise
+        # over-long lesson (essay dump) is truncated, not rejected or unbounded
+        long = registry.dispatch("learn_lesson", {"lesson": "x" * 5000})
+        assert "shortened" in long
+        return f"guards held, count={les.count()}"
+    check("lessons hallucination guards", hallucination_guards)
+
+    def forget_flow():
+        before = les.count()
+        assert "Forgotten lesson" in registry.dispatch("forget_lesson", {"query": "read_pdf"})
+        assert les.count() == before - 1
+        assert 'No lesson matches' in registry.dispatch("forget_lesson", {"query": "zzzz"})
+        return "forget ok"
+    check("lessons forget", forget_flow)
+
+    def ambiguous_forget_safe():
+        registry.dispatch("learn_lesson", {"lesson": "the user likes short answers"})
+        registry.dispatch("learn_lesson", {"lesson": "the user likes bold changes"})
+        r = registry.dispatch("forget_lesson", {"query": "the user likes"})
+        assert "please be more specific" in r, r
+        return "ambiguous forget deletes nothing"
+    check("lessons ambiguous-forget safety", ambiguous_forget_safe)
+
+    def corrupt_store_recovers():
+        les._STORE.write_text("{ not valid json ", encoding="utf-8")
+        assert les.count() == 0  # must not raise; corrupt file set aside
+        assert les._STORE.with_name("lessons.corrupt.json").exists()
+        return "corrupt store recovered"
+    check("lessons corrupt-store recovery", corrupt_store_recovers)
+
+    # check() swallows assertion errors, so control always reaches here
+    shutil.rmtree(_lesdir, ignore_errors=True)
+
+
+def t_mind():
+    """The mind loader: JARVIS.md wins when present, falls back when not, and
+    the agent assembles mind -> tool rules -> facts -> lessons. No model
+    needed, so it lives in the safe set."""
+    from jarvis import mind
+    from jarvis import agent as agent_mod
+
+    def loads_file_or_fallback():
+        text = mind.load_mind()
+        assert "You are Jarvis" in text and "HONESTY" in text, text[:80]
+        # the baked-in fallback is self-sufficient
+        assert "You are Jarvis" in mind.FALLBACK_MIND
+        return "mind loads with the three principles"
+    check("mind loads", loads_file_or_fallback)
+
+    def fallback_on_missing(_orig=mind._MIND_FILE):
+        import pathlib
+        mind._MIND_FILE = pathlib.Path("does_not_exist_JARVIS.md")
+        try:
+            assert mind.load_mind() == mind.FALLBACK_MIND
+        finally:
+            mind._MIND_FILE = _orig
+        return "missing file falls back to the baked-in mind"
+    check("mind fallback", fallback_on_missing)
+
+    def agent_assembly_order():
+        a = agent_mod.Agent("dummy-model")  # no model call happens here
+        base = a.messages[0]["content"]
+        # mind (identity) comes before the tool-use rules
+        assert base.index("You are Jarvis") < base.index("rules for using your tools"), \
+            "mind must precede the tool rules"
+        assert "how you think" in base.lower()
+        return "agent puts the mind before the tool rules"
+    check("mind agent assembly", agent_assembly_order)
+
+
 def t_shell():
     """Exercises the safe run_command tool + its defenses. No model needed."""
     from jarvis.tools import shell  # noqa: F401  (register)
@@ -225,6 +360,298 @@ def t_shell():
         registry.dispatch("run_command", {"command": 123})  # must not raise
         return "wrong-type args survived"
     check("shell wrong-type guards", wrong_types_dont_crash)
+
+
+def t_runner():
+    """Exercises the run_project_command tool: real subprocesses in a sandbox
+    project folder under home, plus its allowlist/containment/publish defenses.
+    Deterministic (uses this same Python), needs no model, lives in the safe
+    set."""
+    import os
+    import pathlib
+    import shutil as _shutil
+    import sys as _sys
+    import uuid
+    from jarvis.tools import runner  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    _sb = "jarvis_runner_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
+    sandbox.mkdir()
+    try:
+        (sandbox / "hello.py").write_text("print('hi from jarvis')\n")
+        (sandbox / "boom.py").write_text("import sys; sys.exit(3)\n")
+
+        def runs_a_script():
+            out = registry.dispatch("run_project_command",
+                                    {"command": "python hello.py", "directory": _sb})
+            assert "succeeded" in out and "hi from jarvis" in out, out
+            return "script ran, stdout + exit captured"
+        check("runner runs a script", runs_a_script)
+
+        def reports_nonzero_exit():
+            out = registry.dispatch("run_project_command",
+                                    {"command": "python boom.py", "directory": _sb})
+            assert "failed" in out and "exit code 3" in out, out
+            return "nonzero exit reported"
+        check("runner reports exit code", reports_nonzero_exit)
+
+        def captures_stderr():
+            # write to stderr via a -c one-liner; the quoted arg must survive
+            out = registry.dispatch("run_project_command",
+                                    {"command": 'python -c "import sys; sys.stderr.write(\'oops\')"',
+                                     "directory": _sb})
+            assert "Errors:" in out and "oops" in out, out
+            return "stderr captured"
+        check("runner captures stderr", captures_stderr)
+
+        def allowlist_blocks():
+            # a non-build/dev program is refused, not run
+            for bad in ("del hello.py", "format c:", "powershell -c ls",
+                        "notepad", "curl http://x"):
+                r = registry.dispatch("run_project_command",
+                                      {"command": bad, "directory": _sb})
+                assert "not an allowed program" in r, f"{bad!r} not blocked: {r}"
+            return "disallowed programs blocked"
+        check("runner allowlist", allowlist_blocks)
+
+        def shell_metachars_inert():
+            # '&' can't chain a second command: it becomes an inert argument to
+            # python, which nothing shells out. The delete never happens.
+            probe = sandbox / "hello.py"
+            registry.dispatch("run_project_command",
+                              {"command": "python --version & del hello.py",
+                               "directory": _sb})
+            assert probe.exists(), "metacharacter injection deleted a file!"
+            return "shell metacharacters inert"
+        check("runner injection inert", shell_metachars_inert)
+
+        def path_exe_refused():
+            r = registry.dispatch("run_project_command",
+                                  {"command": r".\evil.exe", "directory": _sb})
+            assert "not a path" in r, r
+            return "path-y executable refused"
+        check("runner refuses path executable", path_exe_refused)
+
+        def publish_refused():
+            r = registry.dispatch("run_project_command",
+                                  {"command": "git push origin main", "directory": _sb})
+            assert "won't do that automatically" in r, r
+            return "git push refused"
+        check("runner refuses publish/push", publish_refused)
+
+        def containment_guard():
+            r = registry.dispatch("run_project_command",
+                                  {"command": "python hello.py", "directory": "C:/Windows"})
+            assert "only work inside your own folders" in r, r
+            up = registry.dispatch("run_project_command",
+                                   {"command": "python hello.py",
+                                    "directory": f"{_sb}/../../../.."})
+            assert "only work inside" in up, up
+            return "containment (absolute + ..-escape) held"
+        check("runner containment guard", containment_guard)
+
+        def missing_folder():
+            r = registry.dispatch("run_project_command",
+                                  {"command": "python hello.py",
+                                   "directory": f"{_sb}/nope"})
+            assert "can't find the folder" in r, r
+            return "missing folder reported"
+        check("runner missing folder", missing_folder)
+
+        def not_installed():
+            r = registry.dispatch("run_project_command",
+                                  {"command": "cargo build", "directory": _sb})
+            # cargo is allowlisted but (almost certainly) not on this PC
+            assert ("installed" in r) or ("succeeded" in r) or ("failed" in r), r
+            return "uninstalled allowed tool handled"
+        check("runner uninstalled tool", not_installed)
+
+        def alt_names_and_guards():
+            # alternate arg names (cmd/dir) still work
+            ok = registry.dispatch("run_project_command",
+                                   {"cmd": "python --version", "dir": _sb})
+            assert "succeeded" in ok, ok
+            # empty / missing / wrong-type must not raise
+            assert "Error" in registry.dispatch("run_project_command", {"command": ""})
+            assert "Error" in registry.dispatch("run_project_command", {})
+            registry.dispatch("run_project_command", {"command": 123, "directory": _sb})
+            # ascii-only output
+            out = registry.dispatch("run_project_command",
+                                    {"command": "python --version", "directory": _sb})
+            assert out == out.encode("ascii", "replace").decode("ascii"), out
+            return "alt names + wrong-type + ASCII guards held"
+        check("runner alt names + guards", alt_names_and_guards)
+
+        def timeout_clamped():
+            assert runner._clamp_timeout(10 ** 9) == runner.MAX_TIMEOUT
+            assert runner._clamp_timeout(None) == runner.DEFAULT_TIMEOUT
+            assert runner._clamp_timeout(-3) == runner.DEFAULT_TIMEOUT
+            assert runner._clamp_timeout("30 seconds") == 30
+            return "timeout coerced + clamped"
+        check("runner timeout clamp", timeout_clamped)
+
+    finally:
+        _shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_background():
+    """Exercises the background command runner (start/check/stop): real
+    subprocesses in a sandbox project folder under home, streamed output, the
+    stop path, and the shared runner defenses. Deterministic (uses this same
+    Python), needs no model, lives in the safe set."""
+    import os
+    import pathlib
+    import shutil as _shutil
+    import time as _time
+    import uuid
+    from jarvis.tools import background  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    _sb = "jarvis_bg_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
+    sandbox.mkdir()
+    started = []  # job ids to make sure we stop everything we launched
+
+    def _start(cmd, directory=_sb, **kw):
+        out = registry.dispatch("start_background_command",
+                                {"command": cmd, "directory": directory, **kw})
+        if "(job " in out:
+            started.append(out.split("(job ")[1].split(")")[0].strip())
+        return out
+
+    def _wait_done(jid, budget=8.0):
+        deadline = _time.time() + budget
+        while _time.time() < deadline:
+            r = registry.dispatch("check_background_command", {"job_id": jid})
+            if "still running" not in r:
+                return r
+            _time.sleep(0.15)
+        return registry.dispatch("check_background_command", {"job_id": jid})
+
+    try:
+        (sandbox / "slow.py").write_text(
+            "import time,sys\n"
+            "for i in range(3):\n"
+            "    print('tick', i, flush=True)\n"
+            "    time.sleep(0.5)\n"
+            "sys.stderr.write('done-err')\n")
+        (sandbox / "boom.py").write_text("import sys; sys.exit(4)\n")
+        (sandbox / "server.py").write_text("import time\nwhile True: time.sleep(0.3)\n")
+
+        def starts_and_finishes():
+            r = _start("python slow.py")
+            assert "in the background" in r and "job " in r, r
+            jid = r.split("(job ")[1].split(")")[0].strip()
+            done = _wait_done(jid)
+            assert "succeeded" in done, done
+            assert "tick 0" in done and "tick 2" in done, done
+            assert "done-err" in done, done  # stderr captured too
+            return "started, streamed output, finished with stdout+stderr"
+        check("background start + finish", starts_and_finishes)
+
+        def shows_running_then_output():
+            r = _start("python slow.py")
+            jid = r.split("(job ")[1].split(")")[0].strip()
+            _time.sleep(0.4)
+            mid = registry.dispatch("check_background_command", {"job_id": jid})
+            assert "still running" in mid, mid
+            assert "tick 0" in mid, mid  # partial output visible while running
+            _wait_done(jid)
+            return "in-progress poll shows running + partial output"
+        check("background in-progress poll", shows_running_then_output)
+
+        def reports_nonzero_exit():
+            r = _start("python boom.py")
+            jid = r.split("(job ")[1].split(")")[0].strip()
+            done = _wait_done(jid)
+            assert "failed" in done and "exit code 4" in done, done
+            return "nonzero exit reported"
+        check("background nonzero exit", reports_nonzero_exit)
+
+        def stop_a_server():
+            r = _start("python server.py")
+            jid = r.split("(job ")[1].split(")")[0].strip()
+            _time.sleep(0.3)
+            assert "still running" in registry.dispatch(
+                "check_background_command", {"job_id": jid})
+            st = registry.dispatch("stop_background_command", {"job_id": jid})
+            assert "Stopped background job" in st, st
+            after = registry.dispatch("check_background_command", {"job_id": jid})
+            assert "was stopped" in after and "time limit" not in after, after
+            again = registry.dispatch("stop_background_command", {"job_id": jid})
+            assert "already finished" in again, again
+            return "long job stopped; re-stop is a friendly no-op"
+        check("background stop", stop_a_server)
+
+        def list_and_unknown():
+            listed = registry.dispatch("check_background_command", {})
+            assert "Background commands:" in listed, listed
+            assert started[0] in listed, listed  # our jobs appear in the list
+            bad = registry.dispatch("check_background_command",
+                                    {"job_id": "zzzzzzzz"})
+            assert "don't have a background job" in bad, bad
+            nobody = registry.dispatch("stop_background_command",
+                                       {"job_id": "zzzzzzzz"})
+            assert "don't have a background job" in nobody, nobody
+            return "job listing + unknown-id guards"
+        check("background list + unknown id", list_and_unknown)
+
+        def shares_runner_defenses():
+            # allowlist, containment, path-exe and publish/push refused BEFORE launch
+            assert "not an allowed program" in _start("del slow.py")
+            assert "only work inside" in _start("python slow.py",
+                                                directory="C:/Windows")
+            assert "not a path" in _start(r".\evil.exe")
+            assert "won't do that automatically" in _start("git push origin main")
+            # nothing was actually launched by those refusals
+            return "allowlist + containment + path + publish refused"
+        check("background shares runner defenses", shares_runner_defenses)
+
+        def running_limit():
+            saved = background.MAX_JOBS
+            background.MAX_JOBS = 1
+            try:
+                r = _start("python server.py")
+                jid = r.split("(job ")[1].split(")")[0].strip()
+                blocked = _start("python server.py")
+                assert "already running" in blocked, blocked
+                registry.dispatch("stop_background_command", {"job_id": jid})
+            finally:
+                background.MAX_JOBS = saved
+            return "concurrent-job cap enforced"
+        check("background running limit", running_limit)
+
+        def alt_names_and_guards():
+            # alternate arg names (cmd/dir + id) still work
+            r = registry.dispatch("start_background_command",
+                                  {"cmd": "python boom.py", "dir": _sb})
+            assert "in the background" in r, r
+            jid = r.split("(job ")[1].split(")")[0].strip()
+            _wait_done(jid)
+            assert "exit code 4" in registry.dispatch(
+                "check_background_command", {"id": jid})
+            # empty / missing / wrong-type must not raise
+            assert "Error" in registry.dispatch("start_background_command",
+                                                {"command": ""})
+            assert "Error" in registry.dispatch("start_background_command", {})
+            assert "which background job" in registry.dispatch(
+                "stop_background_command", {})
+            registry.dispatch("start_background_command",
+                              {"command": 123, "directory": _sb})
+            # ascii-only output
+            out = registry.dispatch("check_background_command", {})
+            assert out == out.encode("ascii", "replace").decode("ascii"), out
+            return "alt names + wrong-type + ASCII guards held"
+        check("background alt names + guards", alt_names_and_guards)
+
+    finally:
+        for jid in started:
+            registry.dispatch("stop_background_command", {"job_id": jid})
+        _time.sleep(0.2)  # let stopped processes release the sandbox files
+        _shutil.rmtree(sandbox, ignore_errors=True)
 
 
 def t_find():
@@ -402,6 +829,202 @@ def t_search():
             assert "No files containing" in out, out
             return "no-match message ok"
         check("search no-match message", no_match_is_friendly)
+    finally:
+        import shutil
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_codesearch():
+    """Exercises the search_code tool (grep-style REGEX + file glob) and its
+    defenses against 8B hallucinations. Uses a temp project tree inside the
+    user's home (search only looks under home), so no models are needed and it
+    lives in the safe set."""
+    import os
+    import pathlib
+    from jarvis.tools import codesearch  # noqa: F401  (register)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    _sb = "jarvis_codesearch_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
+    (sandbox / "src" / "pkg").mkdir(parents=True, exist_ok=True)
+    (sandbox / "app.py").write_text(
+        "import os\n\n\ndef run_project(x):\n    return x  # TODO: validate\n",
+        encoding="utf-8")
+    (sandbox / "src" / "pkg" / "util.py").write_text(
+        "import requests\n\n\ndef helper():\n    run_project(1)  # FIXME later\n",
+        encoding="utf-8")
+    (sandbox / "notes.txt").write_text(
+        "run_project is mentioned here too\n", encoding="utf-8")
+    # a file with non-ASCII content: match line must be sanitised, not crash
+    (sandbox / "accents.py").write_text(
+        "# cafe expose def run_project naive\n", encoding="utf-8")
+    # a pruned dir that must NOT be descended into
+    (sandbox / "node_modules").mkdir(exist_ok=True)
+    (sandbox / "node_modules" / "junk.py").write_text(
+        "def run_project(): pass\n", encoding="utf-8")
+    # a binary file that must be skipped, not read as text
+    (sandbox / "blob.pyc").write_bytes(b"def run_project\x00\x01\x02binary")
+
+    try:
+        def regex_definition():
+            out = registry.dispatch(
+                "search_code",
+                {"pattern": r"def run_project", "folder": f"{_sb}"})
+            assert "app.py" in out, out
+            assert "4:" in out                 # its line number is shown
+            # a bare 'run_project' call in util.py isn't a "def", so excluded
+            assert "util.py" not in out, out
+            return "regex matched the definition with line number"
+        check("codesearch regex definition", regex_definition)
+
+        def alternation_regex():
+            out = registry.dispatch(
+                "search_code",
+                {"pattern": r"TODO|FIXME", "folder": f"{_sb}"})
+            assert "app.py" in out and "util.py" in out, out
+            return "alternation regex matched across files"
+        check("codesearch alternation", alternation_regex)
+
+        def glob_filter_by_extension():
+            # limiting to *.py must exclude the .txt hit
+            out = registry.dispatch(
+                "search_code",
+                {"pattern": "run_project", "folder": f"{_sb}", "glob": "*.py"})
+            assert "app.py" in out and "notes.txt" not in out, out
+            return "glob *.py excluded the .txt file"
+        check("codesearch glob extension", glob_filter_by_extension)
+
+        def glob_recursive_path():
+            # a path glob with ** must reach the nested file only
+            out = registry.dispatch(
+                "search_code",
+                {"pattern": "requests", "folder": f"{_sb}",
+                 "glob": "src/**/*.py"})
+            assert "util.py" in out, out
+            assert "app.py" not in out, out    # not under src/
+            return "recursive path glob matched only the nested file"
+        check("codesearch recursive glob", glob_recursive_path)
+
+        def case_insensitive_default_and_sensitive():
+            ins = registry.dispatch(
+                "search_code", {"pattern": "IMPORT", "folder": f"{_sb}"})
+            assert "app.py" in ins, ins       # matched lowercase 'import'
+            sen = registry.dispatch(
+                "search_code",
+                {"pattern": "IMPORT", "folder": f"{_sb}",
+                 "case_sensitive": True})
+            assert "No code matching" in sen, sen
+            return "case-insensitive default + case_sensitive honored"
+        check("codesearch case sensitivity", case_insensitive_default_and_sensitive)
+
+        def prunes_and_skips_binary():
+            out = registry.dispatch(
+                "search_code", {"pattern": "run_project", "folder": f"{_sb}"})
+            assert "junk.py" not in out, f"node_modules not pruned: {out}"
+            assert "blob.pyc" not in out, f"binary not skipped: {out}"
+            return "noise dirs pruned + binary skipped"
+        check("codesearch prunes + skips binary", prunes_and_skips_binary)
+
+        def bad_regex_falls_back_to_literal():
+            # an unbalanced '(' is invalid regex -> treated as literal text,
+            # and the reply says so, rather than crashing or matching nothing
+            out = registry.dispatch(
+                "search_code",
+                {"pattern": "run_project(", "folder": f"{_sb}", "glob": "*.py"})
+            assert "wasn't a valid regex" in out, out
+            assert "util.py" in out, out       # 'run_project(1)' literal hit
+            return "invalid regex fell back to literal text"
+        check("codesearch bad-regex fallback", bad_regex_falls_back_to_literal)
+
+        def output_is_ascii():
+            out = registry.dispatch(
+                "search_code", {"pattern": "run_project", "folder": f"{_sb}"})
+            out.encode("ascii")  # raises if any non-ASCII leaked through
+            return "output stayed pure ASCII"
+        check("codesearch ascii-only output", output_is_ascii)
+
+        def containment_guard():
+            r = registry.dispatch(
+                "search_code", {"pattern": "password", "folder": "C:\\Windows"})
+            assert "only search inside your own folders" in r, r
+            up = registry.dispatch(
+                "search_code",
+                {"pattern": "x", "folder": f"{_sb}/../../../.."})
+            assert "only search inside" in up, up
+            return "escape outside home blocked (absolute + ..)"
+        check("codesearch containment guard", containment_guard)
+
+        def alt_arg_names():
+            # a model reaching for 'query'/'dir'/'file' instead of the real names
+            out = registry.dispatch(
+                "search_code",
+                {"query": "run_project", "dir": f"{_sb}", "file": "*.py"})
+            assert "app.py" in out and "notes.txt" not in out, out
+            return "alt arg names honored"
+        check("codesearch alt arg names", alt_arg_names)
+
+        def hallucination_guards():
+            assert "Error" in registry.dispatch("search_code", {"pattern": ""})
+            assert "Error" in registry.dispatch("search_code", {})   # missing
+            # wrong types must not raise
+            registry.dispatch("search_code", {"pattern": 123, "folder": f"{_sb}"})
+            registry.dispatch(
+                "search_code",
+                {"pattern": "x", "folder": f"{_sb}", "glob": 5})
+            # bare '*' glob is treated as no filter, not a crash
+            registry.dispatch(
+                "search_code",
+                {"pattern": "run_project", "folder": f"{_sb}", "glob": "*"})
+            # missing folder is a friendly message, not a crash
+            miss = registry.dispatch(
+                "search_code", {"pattern": "x", "folder": f"{_sb}/nope"})
+            assert "does not exist" in miss, miss
+            return "guards held"
+        check("codesearch hallucination guards", hallucination_guards)
+
+        def no_match_is_friendly():
+            out = registry.dispatch(
+                "search_code",
+                {"pattern": "zzzznotathing", "folder": f"{_sb}"})
+            assert "No code matching" in out, out
+            return "no-match message ok"
+        check("codesearch no-match message", no_match_is_friendly)
+
+        def context_lines_window():
+            # -C style: context=1 shows one line on each side of the match,
+            # context lines marked with '-', the match line with ':'.
+            out = registry.dispatch(
+                "search_code",
+                {"pattern": r"def run_project", "folder": f"{_sb}",
+                 "glob": "app.py", "context": 1})
+            assert "4: " in out, out            # the matching line (def)
+            assert "3- " in out, out            # a blank context line above
+            assert "5- " in out, out            # the 'return x' context line below
+            assert "return x" in out, out
+            # default (no context) must NOT pull in the surrounding lines
+            plain = registry.dispatch(
+                "search_code",
+                {"pattern": r"def run_project", "folder": f"{_sb}",
+                 "glob": "app.py"})
+            assert "return x" not in plain, plain
+            # alt arg name + clamp: a huge value can't blow up, still ASCII
+            alt = registry.dispatch(
+                "search_code",
+                {"pattern": r"def run_project", "folder": f"{_sb}",
+                 "glob": "app.py", "context_lines": 9999})
+            alt.encode("ascii")
+            assert "4: " in alt, alt
+            return "context window shows +/- lines (grep -C), clamped + ASCII"
+        check("codesearch context lines", context_lines_window)
+
+        def is_offered_for_code_query():
+            # the router must actually offer search_code for a code query
+            specs = registry.specs_for("search my code for the run_project function")
+            names = [s["function"]["name"] for s in specs]
+            assert "search_code" in names, names
+            return "router offers search_code for a code query"
+        check("codesearch router offer", is_offered_for_code_query)
     finally:
         import shutil
         shutil.rmtree(sandbox, ignore_errors=True)
@@ -1501,6 +2124,193 @@ def t_compare():
             assert "different" in out, out
             return "guards held"
         check("compare_files hallucination guards", hallucination_guards)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def t_edit():
+    """Exercises the edit_file tool (targeted find-and-replace in a file) + its
+    defenses against 8B hallucinations. Works entirely inside a temp tree in the
+    user's home, so it is deterministic, needs no model, and lives in the safe
+    set."""
+    import os
+    import pathlib
+    import shutil
+    from jarvis.tools import edit  # noqa: F401  (register edit_file)
+    from jarvis.tools import registry
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    _sb = "jarvis_edit_smoke_%d_%s" % (os.getpid(), uuid.uuid4().hex)
+    sandbox = home / _sb
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    try:
+        def single_replacement():
+            f = sandbox / "config.txt"
+            f.write_text("host = localhost\nport = 3000\ndebug = true\n",
+                         encoding="utf-8")
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/config.txt", "old": "port = 3000",
+                 "new": "port = 8080"})
+            assert "Error" not in out and "replaced 1 occurrence" in out, out
+            body = f.read_text(encoding="utf-8")
+            assert "port = 8080" in body and "port = 3000" not in body, body
+            assert "host = localhost" in body and "debug = true" in body, body  # rest intact
+            return "one exact replacement, rest of file untouched"
+        check("edit_file single replacement", single_replacement)
+
+        def deletes_with_empty_new():
+            f = sandbox / "del.txt"
+            f.write_text("keep this\nREMOVE ME\nkeep that\n", encoding="utf-8")
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/del.txt", "old": "REMOVE ME\n", "new": ""})
+            assert "Error" not in out, out
+            body = f.read_text(encoding="utf-8")
+            assert body == "keep this\nkeep that\n", repr(body)
+            return "empty 'new' deletes the old text"
+        check("edit_file empty new deletes", deletes_with_empty_new)
+
+        def ambiguous_without_replace_all():
+            f = sandbox / "many.txt"
+            f.write_text("cat\ncat\ncat\n", encoding="utf-8")
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/many.txt", "old": "cat", "new": "dog"})
+            assert "appears 3 times" in out and "replace_all" in out, out
+            assert f.read_text(encoding="utf-8") == "cat\ncat\ncat\n"  # untouched
+            return "multiple matches refused unless replace_all"
+        check("edit_file ambiguous refused", ambiguous_without_replace_all)
+
+        def replace_all_flag():
+            f = sandbox / "all.txt"
+            f.write_text("cat cat cat", encoding="utf-8")
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/all.txt", "old": "cat", "new": "dog",
+                 "replace_all": True})
+            assert "replaced 3 occurrences" in out, out
+            assert f.read_text(encoding="utf-8") == "dog dog dog"
+            return "replace_all changes every occurrence"
+        check("edit_file replace_all", replace_all_flag)
+
+        def not_found_is_friendly():
+            f = sandbox / "nf.txt"
+            f.write_text("hello world\n", encoding="utf-8")
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/nf.txt", "old": "goodbye", "new": "hi"})
+            assert "couldn't find that exact text" in out, out
+            assert f.read_text(encoding="utf-8") == "hello world\n"  # untouched
+            return "missing 'old' text -> friendly, file untouched"
+        check("edit_file not found", not_found_is_friendly)
+
+        def preserves_crlf():
+            f = sandbox / "crlf.txt"
+            f.write_bytes(b"one\r\ntwo\r\nthree\r\n")     # Windows line endings
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/crlf.txt", "old": "two", "new": "TWO"})
+            assert "Error" not in out, out
+            raw = f.read_bytes()
+            assert raw == b"one\r\nTWO\r\nthree\r\n", raw   # CRLF preserved
+            return "original CRLF line endings preserved"
+        check("edit_file preserves crlf", preserves_crlf)
+
+        def alt_arg_names():
+            f = sandbox / "alt.txt"
+            f.write_text("version = 1.0\n", encoding="utf-8")
+            out = registry.dispatch("edit_file",
+                {"file": f"{_sb}/alt.txt", "find": "1.0", "replace": "2.0"})
+            assert "Error" not in out, out
+            assert f.read_text(encoding="utf-8") == "version = 2.0\n"
+            return "alt file/find/replace arg names handled"
+        check("edit_file alt arg names", alt_arg_names)
+
+        def no_op_same_text():
+            f = sandbox / "same.txt"
+            f.write_text("x = 1\n", encoding="utf-8")
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/same.txt", "old": "x = 1", "new": "x = 1"})
+            assert "nothing to change" in out and "Error" not in out, out
+            return "old == new -> friendly no-op"
+        check("edit_file no-op same text", no_op_same_text)
+
+        def binary_refused():
+            f = sandbox / "pic.bin"
+            f.write_bytes(b"\x00\x01BIN\x00data")
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/pic.bin", "old": "BIN", "new": "TXT"})
+            assert "binary" in out and "Error" in out, out
+            return "binary file refused"
+        check("edit_file binary refused", binary_refused)
+
+        def missing_file_steers_to_write():
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/nope.txt", "old": "a", "new": "b"})
+            assert "can't find" in out and "write_file" in out, out
+            return "missing file -> steered to write_file"
+        check("edit_file missing file", missing_file_steers_to_write)
+
+        def containment_guard():
+            r = registry.dispatch("edit_file",
+                {"path": "C:\\Windows\\win.ini", "old": "a", "new": "b"})
+            assert "only work inside your own folders" in r, r
+            f = sandbox / "esc.txt"
+            f.write_text("data", encoding="utf-8")
+            r2 = registry.dispatch("edit_file",
+                {"path": f"{_sb}/../../../Windows/win.ini", "old": "a", "new": "b"})
+            assert "only work inside your own folders" in r2, r2
+            return "escape outside home blocked"
+        check("edit_file containment guard", containment_guard)
+
+        def folder_refused():
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}", "old": "a", "new": "b"})
+            assert "is a folder" in out, out
+            return "folder source refused"
+        check("edit_file folder refused", folder_refused)
+
+        def output_is_ascii():
+            f = sandbox / "asc.txt"
+            f.write_bytes("café “x”\n".encode("utf-8"))
+            registry.dispatch("edit_file",
+                {"path": f"{_sb}/asc.txt", "old": "x", "new": "y"}).encode("ascii")
+            return "output stayed pure ASCII"
+        check("edit_file ascii-only output", output_is_ascii)
+
+        def size_cap():
+            f = sandbox / "big.txt"
+            f.write_text("hello there\n", encoding="utf-8")
+            saved = edit.MAX_FILE_BYTES
+            edit.MAX_FILE_BYTES = 3               # file is bigger than this
+            try:
+                out = registry.dispatch("edit_file",
+                    {"path": f"{_sb}/big.txt", "old": "hello", "new": "hi"})
+                assert "too big" in out and "Error" in out, out
+                assert f.read_text(encoding="utf-8") == "hello there\n"  # untouched
+            finally:
+                edit.MAX_FILE_BYTES = saved
+            return "oversized file refused, not edited"
+        check("edit_file size cap", size_cap)
+
+        def hallucination_guards():
+            f = sandbox / "g.txt"
+            f.write_text("alpha beta\n", encoding="utf-8")
+            # missing args -> friendly errors, never a crash
+            assert "Error" in registry.dispatch("edit_file", {})
+            assert "Error" in registry.dispatch("edit_file",
+                {"path": f"{_sb}/g.txt"})                       # missing old
+            assert "Error" in registry.dispatch("edit_file",
+                {"path": f"{_sb}/g.txt", "old": ""})            # empty old
+            # wrong types / weird shapes must not raise
+            registry.dispatch("edit_file", {"path": 123, "old": "a", "new": "b"})
+            registry.dispatch("edit_file",
+                {"path": f"{_sb}/g.txt", "old": ["a"], "new": {}})
+            # an unexpected extra arg is dropped, a valid edit still goes through
+            out = registry.dispatch("edit_file",
+                {"path": f"{_sb}/g.txt", "old": "alpha", "new": "ALPHA",
+                 "reason": "curious"})
+            assert "Error" not in out, out
+            assert f.read_text(encoding="utf-8") == "ALPHA beta\n"
+            return "guards held"
+        check("edit_file hallucination guards", hallucination_guards)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -3352,14 +4162,26 @@ def t_vision():
 
 def t_tts():
     import time
-    from jarvis.voice.tts import Speaker
+    from jarvis import config as c
+    from jarvis.voice import tts
     def speak():
-        s = Speaker()
+        s = tts.build(c.load())
         s.say("Systems online, sir.")
-        time.sleep(4)
+        time.sleep(0.3)
+        while s.speaking.is_set():
+            time.sleep(0.05)
+        # barge-in: a long line cut off mid-sentence must stop within ~0.3s
+        s.say("This is a long sentence that we will interrupt before it ends "
+              "to make sure barge-in stops the audio quickly.")
+        time.sleep(0.8)
+        t0 = time.monotonic()
+        s.shutup()
+        while s.speaking.is_set() and time.monotonic() - t0 < 3:
+            time.sleep(0.02)
+        stopped = time.monotonic() - t0
         s.stop()
-        return f"speaker ok={s.ok}"
-    check("tts speak", speak)
+        return f"engine={type(s).__name__} ok={s.ok} barge_in_stop={stopped:.2f}s"
+    check("tts speak + barge-in", speak)
 
 
 def t_hud():
@@ -3433,6 +4255,43 @@ def t_textstats():
     sandbox = home / _sb
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True, exist_ok=True)
+
+    # The model often passes the WHOLE question as 'text' ("how many words are
+    # in this sentence: <sentence>"), so the request itself gets counted too.
+    # count_words strips the request and measures only the text meant.
+    def _colon_request():
+        out = registry.dispatch("count_words", {
+            "text": "how many words are in this sentence: the quick brown "
+                    "fox jumps over the lazy dog"})
+        assert "9 words" in out, out
+        return out
+
+    check("count_words ignores a 'how many words ...:' preamble", _colon_request)
+
+    def _quoted_request():
+        out = registry.dispatch("count_words", {
+            "text": 'how many words are in "the quick brown fox jumps over '
+                    'the lazy dog"'})
+        assert "9 words" in out, out
+        return out
+
+    check("count_words counts only the quoted span", _quoted_request)
+
+    def _plain_text_untouched():
+        out = registry.dispatch("count_words", {
+            "text": "the quick brown fox jumps over the lazy dog"})
+        assert "9 words" in out, out
+        return out
+
+    check("count_words leaves plain text alone", _plain_text_untouched)
+
+    def _ordinary_colon_untouched():
+        out = registry.dispatch("count_words", {
+            "text": "Meeting notes: we agreed on three things today"})
+        assert "8 words" in out, out
+        return out
+
+    check("count_words does not strip an ordinary colon", _ordinary_colon_untouched)
 
     # a plain-text file with a known word count
     (sandbox / "essay.txt").write_text("one two three four five\n", encoding="utf-8")
@@ -4901,13 +5760,183 @@ def _fail():
     raise AssertionError("lock_pc missing from registry")
 
 
+def t_agentguard():
+    """A model that writes its tool call as TEXT instead of a structured call
+    must not have that raw JSON handed back (or spoken) to the user."""
+    from jarvis import agent as agent_mod
+    from jarvis.tools import system  # noqa: F401  (registers get_time)
+
+    parse = agent_mod._tool_call_in_text
+
+    check("plain prose is not a tool call",
+          lambda: "none" if parse("It is 5:13 PM, sir.") is None
+          else _fail("prose parsed as a tool call"))
+    check("ordinary json is not a tool call",
+          lambda: "none" if parse('{"temperature": 27}') is None
+          else _fail("non-tool json parsed as a tool call"))
+
+    def _bare():
+        got = parse('{"name": "count_words", "arguments": {"text": "hi there"}}')
+        assert got == ("count_words", {"text": "hi there"}), got
+        return got
+
+    check("bare tool-call json is detected", _bare)
+
+    def _fenced():
+        got = parse('Sure!\n```json\n{"name": "get_time", "arguments": {}}\n```')
+        assert got == ("get_time", {}), got
+        return got
+
+    check("fenced tool-call json is detected", _fenced)
+
+    def _string_args():
+        got = parse('{"name": "get_time", "arguments": "{}"}')
+        assert got == ("get_time", {}), got
+        return got
+
+    check("arguments given as a json string are parsed", _string_args)
+
+    def _dispatched():
+        a = agent_mod.Agent("test-model")
+        replies = [
+            {"message": {"content": '{"name": "get_time", "arguments": {}}'}},
+            {"message": {"content": "It is 5:13 PM, sir."}},
+        ]
+        a._call_model = lambda messages, tools=None: replies.pop(0)
+        out = a.chat("what time is it")
+        assert out == "It is 5:13 PM, sir.", out
+        assert "get_time" in a.last_tools, a.last_tools
+        assert "{" not in out, out
+        return out
+
+    check("text-emitted tool call is dispatched, not leaked", _dispatched)
+
+    def _thrash_stops():
+        """Thrashing one tool must end in a real answer built from the results
+        already gathered, not in eight rounds of push-back."""
+        a = agent_mod.Agent("test-model")
+        rounds = {"n": 0}
+
+        def fake(messages, tools=None):
+            if tools is None:  # _final_answer forces a no-tools reply
+                return {"message": {"content": "It is 5:13 PM, sir."}}
+            rounds["n"] += 1
+            return {"message": {"content": "", "tool_calls": [
+                {"function": {"name": "get_time", "arguments": {}}}]}}
+
+        a._call_model = fake
+        out = a.chat("what time is it")
+        assert out == "It is 5:13 PM, sir.", out
+        assert rounds["n"] <= agent_mod.MAX_SAME_TOOL + 1, rounds["n"]
+        return f"answered after {rounds['n']} rounds"
+
+    check("tool thrash is cut short and answered", _thrash_stops)
+
+    def _no_self_feeding():
+        """The model sometimes passes a tool's OWN OUTPUT back into that tool
+        (counting the word count). The loop must refuse to run that."""
+        from jarvis.tools import registry as reg
+        from jarvis.tools import textstats  # noqa: F401  (registers count_words)
+
+        a = agent_mod.Agent("test-model")
+        dispatched = []
+        real = reg.dispatch
+
+        def spy(name, args):
+            dispatched.append(args)
+            return real(name, args)
+
+        first = {"message": {"content": "", "tool_calls": [
+            {"function": {"name": "count_words",
+                          "arguments": {"text": "alpha beta gamma"}}}]}}
+        pending = [first]
+
+        def fake(messages, tools=None):
+            if tools is None:
+                return {"message": {"content": "Three words, sir."}}
+            if pending:
+                return pending.pop(0)
+            # echo the last tool result straight back into the tool
+            return {"message": {"content": "", "tool_calls": [
+                {"function": {"name": "count_words",
+                              "arguments": {"text": messages[-1]["content"]}}}]}}
+
+        rounds = {"n": 0}
+        _inner = fake
+
+        def counting(messages, tools=None):
+            if tools is not None:
+                rounds["n"] += 1
+            return _inner(messages, tools)
+
+        a._call_model = counting
+        reg.dispatch = spy
+        try:
+            out = a.chat("how many words in alpha beta gamma")
+        finally:
+            reg.dispatch = real
+        assert len(dispatched) == 1, dispatched
+        # refusing the echo must END the turn: left running, the model answers
+        # ABOUT the refusal instead of giving the count it already has
+        assert rounds["n"] == 2, rounds["n"]
+        assert out == "Three words, sir.", out
+        return f"{len(dispatched)} dispatch, answered after {rounds['n']} rounds"
+
+    check("a tool's own output is not fed back into it", _no_self_feeding)
+
+    def _knows_the_date():
+        """Asked to build a date the model guesses the year (it produced
+        '2023-11-01' in 2026), so the system message must state today."""
+        import datetime
+        a = agent_mod.Agent("test-model")
+        a._refresh_memory()
+        prompt = a.messages[0]["content"]
+        stamp = datetime.date.today().strftime("%Y-%m-%d")
+        assert stamp in prompt, prompt[-300:]
+        return stamp
+
+    check("system message states today's date", _knows_the_date)
+
+    def _empty_after_tools():
+        """Going quiet after running tools must not become 'Done, sir.' -- the
+        user asked a question and the answer is already in the tool results."""
+        a = agent_mod.Agent("test-model")
+        pending = [
+            {"message": {"content": "", "tool_calls": [
+                {"function": {"name": "get_time", "arguments": {}}}]}},
+            {"message": {"content": ""}},  # runs dry with nothing to say
+        ]
+
+        def fake(messages, tools=None):
+            if tools is None:
+                return {"message": {"content": "It is 6:16 PM, sir."}}
+            return pending.pop(0)
+
+        a._call_model = fake
+        out = a.chat("what time is it")
+        assert out == "It is 6:16 PM, sir.", out
+        return out
+
+    check("an empty reply after tool use is answered, not 'Done, sir.'",
+          _empty_after_tools)
+
+
+def _fail(msg):
+    raise AssertionError(msg)
+
+
 SECTIONS = {"imports": t_imports, "tools": t_tools, "memory": t_memory,
+            "agentguard": t_agentguard,
+            "lessons": t_lessons, "mind": t_mind,
             "writers": t_writers, "network": t_network, "system": t_system,
-            "shell": t_shell, "find": t_find, "search": t_search,
+            "shell": t_shell, "runner": t_runner, "background": t_background,
+            "find": t_find,
+            "search": t_search,
+            "codesearch": t_codesearch,
             "recent": t_recent, "organize": t_organize,
             "movefolder": t_movefolder, "copyfolder": t_copyfolder,
             "makefolder": t_makefolder, "duplicates": t_duplicates,
-            "fileinfo": t_fileinfo, "compare": t_compare,
+            "fileinfo": t_fileinfo, "compare": t_compare, "edit": t_edit,
             "disk": t_disk, "document": t_document, "pdf": t_pdf,
             "excel": t_excel, "explorer": t_explorer,
             "archive": t_archive,
@@ -4929,9 +5958,12 @@ if __name__ == "__main__":
         for fn in SECTIONS.values():
             fn()
     elif which == "safe":
-        t_imports(); t_tools(); t_memory(); t_shell(); t_find(); t_search()
+        t_imports(); t_tools(); t_memory(); t_lessons(); t_mind()
+        t_agentguard()
+        t_shell(); t_runner(); t_background()
+        t_find(); t_search(); t_codesearch()
         t_recent(); t_organize(); t_movefolder(); t_copyfolder(); t_makefolder()
-        t_duplicates(); t_fileinfo(); t_compare(); t_disk()
+        t_duplicates(); t_fileinfo(); t_compare(); t_edit(); t_disk()
         t_document(); t_pdf(); t_excel(); t_explorer()
         t_archive(); t_extract()
         t_recycle(); t_clipboard()

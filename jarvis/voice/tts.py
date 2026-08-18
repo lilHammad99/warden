@@ -1,51 +1,387 @@
-"""Text-to-speech on a dedicated thread.
+"""Text-to-speech on a dedicated thread, interruptible mid-sentence.
 
-Speaks through Windows SAPI5 directly (``SAPI.SpVoice`` via comtypes). We used
-to create a fresh ``pyttsx3`` engine per utterance to dodge SAPI stalls, but
-``pyttsx3.init()`` actually returns a CACHED singleton engine that only speaks
-its FIRST utterance and then goes silent -- so Jarvis would say one thing after
-launch and never speak again. One persistent SpVoice on this thread speaks
-every time.
+Two engines share one interface (``say`` / ``shutup`` / ``stop`` + a
+``speaking`` event):
+
+- **Piper** (preferred): a small local neural voice that sounds genuinely
+  human. ``piper.exe`` streams raw PCM to stdout; we play it through the sound
+  card in small chunks and check an interrupt flag between chunks, so a
+  barge-in stops speech within a few milliseconds. Nothing leaves the PC.
+- **SAPI** (fallback): the built-in Windows voice, spoken asynchronously so we
+  can purge it the instant the user interrupts. Used automatically if Piper
+  isn't set up.
+
+``build(cfg)`` picks the engine from ``config.yaml`` (``voice.engine``:
+auto | piper | sapi) and returns a ready, started speaker.
 """
 
 import queue
+import re
+import subprocess
 import threading
+from pathlib import Path
+
+from ..config import PROJECT_ROOT
+
+# don't flash a console window when spawning piper from the GUI/voice loop
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_PIPER_DIR = PROJECT_ROOT / "models" / "piper"
+_PIPER_EXE = _PIPER_DIR / "piper" / "piper.exe"
+_VOICE_DIR = _PIPER_DIR / "voices"
 
 
-class Speaker(threading.Thread):
-    def __init__(self):
-        super().__init__(daemon=True, name="tts")
+def _clean(text: str) -> str:
+    """Strip the odd markdown character so it isn't read aloud literally."""
+    text = re.sub(r"[*_`#]+", "", text)
+    return text.strip()
+
+
+def _sentences(text: str):
+    """Break a reply into sentences so each is rendered and played on its own.
+
+    This is what lets Jarvis start talking almost immediately (only the first
+    sentence has to be generated before sound begins) and gives us a real,
+    controllable beat of silence between sentences — the measured cadence.
+    """
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+class _BaseSpeaker(threading.Thread):
+    """Common queue/thread plumbing; subclasses implement ``_speak``."""
+
+    def __init__(self, name: str):
+        super().__init__(daemon=True, name=name)
         self.q: queue.Queue = queue.Queue()
         self.speaking = threading.Event()
+        self._interrupt = threading.Event()
+        self._ready = threading.Event()  # set once _setup() has run
+        self._lock = threading.Lock()
+        self._pending = 0
         self.ok = True
-        self.start()
+
+    # --- public API -------------------------------------------------------
+    def say(self, text: str):
+        text = _clean(text or "")
+        if not (self.ok and text):
+            return
+        with self._lock:
+            self._pending += 1
+            self.speaking.set()  # set BEFORE queueing so callers never race us
+        self.q.put(text)
+
+    def shutup(self):
+        """Stop speaking immediately and drop anything still queued."""
+        self._interrupt.set()
+        self._drain()
+
+    def stop(self):
+        self.shutup()
+        self.q.put(None)
+
+    # --- helpers for subclasses ------------------------------------------
+    def _drain(self):
+        try:
+            while True:
+                self.q.get_nowait()
+        except queue.Empty:
+            pass
+        with self._lock:
+            self._pending = 0
+
+    def _finished_one(self):
+        with self._lock:
+            self._pending = max(0, self._pending - 1)
+            if self._pending == 0 and self.q.empty():
+                self.speaking.clear()
 
     def run(self):
-        try:
-            import comtypes
-            comtypes.CoInitialize()  # SAPI is COM; this thread must init it
-            from comtypes.client import CreateObject
-
-            voice = CreateObject("SAPI.SpVoice")
-            voice.Rate = 1  # -10..10; slightly quicker than the default drawl
-        except Exception:
-            self.ok = False
+        self.ok = bool(self._setup())
+        self._ready.set()
+        if not self.ok:
             return
         while True:
             text = self.q.get()
             if text is None:
                 break
+            # Start every utterance with a clean flag. A shutup() while idle
+            # (e.g. the loop clears lingering speech right after the wake word)
+            # leaves _interrupt set with nothing to consume it; clearing here
+            # means it can't silently swallow the NEXT line. A shutup() that
+            # arrives once we're speaking re-sets it, and _speak() catches it.
+            self._interrupt.clear()
             try:
-                self.speaking.set()
-                voice.Speak(text)  # blocking: returns when the utterance ends
+                self._speak(text)
             except Exception:
                 self.ok = False
             finally:
-                self.speaking.clear()
+                self._finished_one()
 
-    def say(self, text: str):
-        if self.ok and text:
-            self.q.put(text)
+    # subclasses override these
+    def _setup(self) -> bool:
+        return True
 
-    def stop(self):
-        self.q.put(None)
+    def _speak(self, text: str):
+        raise NotImplementedError
+
+
+def _clamp(v, lo, hi, default):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return default
+    if v != v:  # NaN
+        return default
+    return max(lo, min(hi, v))
+
+
+class PiperSpeaker(_BaseSpeaker):
+    """Neural, human-sounding, fully local — tuned to sound like the film JARVIS.
+
+    Each reply is spoken one sentence at a time. A sentence is generated by
+    ``piper.exe`` in full, given a warm EQ + a touch of room reverb, and only
+    then played — so there are no mid-generation gaps or clicks (the old
+    stream-while-generating path underran and stuttered). Playback still checks
+    an interrupt flag between short blocks, so a barge-in stops speech in well
+    under 100 ms. Nothing leaves the PC.
+    """
+
+    def __init__(self, voice_path: Path, vcfg: dict | None = None):
+        super().__init__("tts-piper")
+        vcfg = vcfg or {}
+        self.voice_path = voice_path
+        self.sample_rate = self._read_sample_rate(voice_path)
+        self._sd = None
+        self._np = None
+        # delivery: calm and measured
+        self.length_scale = _clamp(vcfg.get("piper_length_scale", 1.15), 0.5, 2.0, 1.15)
+        self.noise_scale = _clamp(vcfg.get("piper_noise_scale", 0.5), 0.0, 1.5, 0.5)
+        self.noise_w = _clamp(vcfg.get("piper_noise_w", 0.7), 0.0, 1.5, 0.7)
+        self.sentence_pause = _clamp(vcfg.get("piper_sentence_pause", 0.45), 0.0, 2.0, 0.45)
+        # tone: warm + cinematic
+        self.warmth = bool(vcfg.get("warmth", True))
+        self.warmth_reverb = _clamp(vcfg.get("warmth_reverb", 0.18), 0.0, 0.6, 0.18)
+
+    @staticmethod
+    def _read_sample_rate(voice_path: Path) -> int:
+        """The voice's sample rate lives in its sidecar <voice>.onnx.json."""
+        try:
+            import json
+            with open(str(voice_path) + ".json", "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            return int(meta.get("audio", {}).get("sample_rate", 22050))
+        except Exception:
+            return 22050
+
+    def _setup(self) -> bool:
+        try:
+            import numpy as np
+            import sounddevice as sd
+        except Exception:
+            return False
+        if not (_PIPER_EXE.exists() and self.voice_path.exists()):
+            return False
+        self._np, self._sd = np, sd
+        return True
+
+    # --- audio shaping ----------------------------------------------------
+    def _warm(self, audio):
+        """Warm, cinematic tone: a gentle EQ (more body, less hiss) plus a very
+        subtle room reverb. Pure numpy, so no new dependency."""
+        np = self._np
+        n = audio.size
+        if n == 0:
+            return audio
+        x = audio.astype(np.float32) / 32768.0
+        sr = self.sample_rate
+
+        # EQ as a smooth gain curve applied in the frequency domain.
+        spec = np.fft.rfft(x)
+        f = np.fft.rfftfreq(n, 1.0 / sr)
+        low = 10 ** (4.5 / 20)    # +4.5 dB of low-end body...
+        hi = 10 ** (-4.0 / 20)    # ...and -4 dB off the top to tame sibilance.
+        gain = np.ones_like(f)
+        gain *= 1 + (low - 1) / (1 + np.exp((f - 200.0) / 70.0))
+        gain *= 1 + (hi - 1) / (1 + np.exp((5200.0 - f) / 1100.0))
+        y = np.fft.irfft(spec * gain, n=n).astype(np.float32)
+
+        # A handful of decaying early reflections = a small, tasteful room.
+        if self.warmth_reverb > 0:
+            wet = np.zeros_like(y)
+            for delay_s, g in ((0.011, 0.30), (0.019, 0.24), (0.029, 0.18),
+                               (0.041, 0.13), (0.057, 0.09)):
+                d = int(delay_s * sr)
+                if 0 < d < n:
+                    wet[d:] += g * y[:n - d]
+            y = y + self.warmth_reverb * wet
+
+        peak = float(np.max(np.abs(y))) if y.size else 0.0
+        if peak > 1.0:  # only ever attenuate, never pump the level up
+            y /= peak
+        return (np.clip(y, -1.0, 1.0) * 32767.0).astype(np.int16)
+
+    def _fade(self, audio, ms: float = 6.0):
+        """Short fade in/out so sentence edges don't click."""
+        np = self._np
+        k = int(self.sample_rate * ms / 1000.0)
+        if k <= 0 or audio.size < k * 2:
+            return audio
+        a = audio.astype(np.float32)
+        ramp = np.linspace(0.0, 1.0, k, dtype=np.float32)
+        a[:k] *= ramp
+        a[-k:] *= ramp[::-1]
+        return a.astype(np.int16)
+
+    def _render(self, text: str):
+        """Run piper for one sentence and return its PCM as an int16 array."""
+        cmd = [
+            str(_PIPER_EXE), "-m", str(self.voice_path), "--output-raw",
+            "--length_scale", repr(self.length_scale),
+            "--noise_scale", repr(self.noise_scale),
+            "--noise_w", repr(self.noise_w),
+            "--sentence_silence", "0.0",  # we control the pause ourselves
+        ]
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
+        )
+        try:
+            out, _ = proc.communicate(text.encode("utf-8", "replace"), timeout=30)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return None
+        if not out:
+            return None
+        return self._np.frombuffer(out, dtype=self._np.int16)
+
+    def _speak(self, text: str):
+        np, sd = self._np, self._sd
+        sentences = _sentences(text) or [text]
+        pause = np.zeros(int(self.sample_rate * self.sentence_pause), dtype=np.int16)
+
+        stream = sd.OutputStream(samplerate=self.sample_rate, channels=1,
+                                 dtype="int16", blocksize=0)
+        stream.start()
+        try:
+            for i, sent in enumerate(sentences):
+                if self._interrupt.is_set():
+                    break
+                pcm = self._render(sent)
+                if pcm is None or pcm.size == 0:
+                    continue
+                if self.warmth:
+                    pcm = self._warm(pcm)
+                pcm = self._fade(pcm)
+                if i < len(sentences) - 1 and pause.size:
+                    pcm = np.concatenate([pcm, pause])
+                # feed the finished sentence in short blocks, watching for a
+                # barge-in between each one (~90 ms granularity).
+                for off in range(0, pcm.size, 2048):
+                    if self._interrupt.is_set():
+                        break
+                    stream.write(pcm[off:off + 2048])
+                if self._interrupt.is_set():
+                    break
+        finally:
+            try:
+                # abort() cuts a barge-in off now; stop() lets the last block
+                # drain so a natural ending doesn't clip.
+                stream.abort() if self._interrupt.is_set() else stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+
+class SapiSpeaker(_BaseSpeaker):
+    """Built-in Windows voice. Async speak so we can purge it on interrupt.
+
+    We pick the least-robotic installed voice and slow the rate slightly for a
+    smoother delivery. Interruption purges the current utterance immediately.
+    """
+
+    # SAPI Speak() flags
+    _ASYNC = 1
+    _PURGE = 2
+    _SPRS_DONE = 1  # SpeechRunState: finished speaking
+
+    def __init__(self):
+        super().__init__("tts-sapi")
+        self.voice = None
+
+    def _setup(self) -> bool:
+        try:
+            import comtypes
+            comtypes.CoInitialize()  # SAPI is COM; this thread must init it
+            from comtypes.client import CreateObject
+            v = CreateObject("SAPI.SpVoice")
+            self._pick_voice(v)
+            v.Rate = 0  # -10..10; default, calmer than the old +1
+            self.voice = v
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _pick_voice(v):
+        """Prefer a warmer voice if present (Zira/Mark) over David."""
+        try:
+            tokens = v.GetVoices()
+            order = ("zira", "mark", "hazel", "david")
+            best, best_rank = None, len(order)
+            for i in range(tokens.Count):
+                tok = tokens.Item(i)
+                desc = tok.GetDescription().lower()
+                for rank, key in enumerate(order):
+                    if key in desc and rank < best_rank:
+                        best, best_rank = tok, rank
+            if best is not None:
+                v.Voice = best
+        except Exception:
+            pass
+
+    def _speak(self, text: str):
+        import time
+        v = self.voice
+        v.Speak(text, self._ASYNC)
+        while True:
+            if self._interrupt.is_set():
+                v.Speak("", self._PURGE)  # stop the current utterance now
+                break
+            try:
+                if v.Status.RunningState == self._SPRS_DONE:
+                    break
+            except Exception:
+                break
+            time.sleep(0.03)
+
+
+def build(cfg: dict):
+    """Return a started speaker chosen from config, with graceful fallback."""
+    vcfg = cfg.get("voice", {}) or {}
+    engine = str(vcfg.get("engine", "auto")).lower()
+    voice_name = vcfg.get("piper_voice", "en_GB-alan-medium")
+    voice_path = _VOICE_DIR / f"{voice_name}.onnx"
+
+    piper_available = _PIPER_EXE.exists() and voice_path.exists()
+
+    if engine in ("auto", "piper") and piper_available:
+        sp = PiperSpeaker(voice_path, vcfg)
+        sp.start()
+        sp._ready.wait(timeout=5)  # let it import numpy/sounddevice + validate
+        if sp.ok:
+            return sp
+        print("(piper failed to start; using the built-in Windows voice)")
+    if engine == "piper" and not piper_available:
+        print("(piper voice not found; falling back to the built-in Windows "
+              "voice — see models/piper)")
+
+    sp = SapiSpeaker()
+    sp.start()
+    return sp

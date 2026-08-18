@@ -1,6 +1,8 @@
 import datetime
+import os
 import sys
 import threading
+import time
 
 from . import config as config_mod
 from .agent import Agent
@@ -34,9 +36,11 @@ def main():
     # importing tool modules registers their tools
     from .tools import apps, files, system, web  # noqa: F401
     from .tools import archive  # noqa: F401
+    from .tools import background  # noqa: F401
     from .tools import calc  # noqa: F401
     from .tools import camera  # noqa: F401
     from .tools import clipboard  # noqa: F401
+    from .tools import codesearch  # noqa: F401
     from .tools import compare  # noqa: F401
     from .tools import convert  # noqa: F401
     from .tools import convertdata  # noqa: F401
@@ -44,12 +48,14 @@ def main():
     from .tools import disk  # noqa: F401
     from .tools import document  # noqa: F401
     from .tools import duplicates  # noqa: F401
+    from .tools import edit  # noqa: F401
     from .tools import excel  # noqa: F401
     from .tools import explorer  # noqa: F401
     from .tools import extract  # noqa: F401
     from .tools import fileinfo  # noqa: F401
     from .tools import find  # noqa: F401
     from .tools import jsondata  # noqa: F401
+    from .tools import lessons as lesson_store  # noqa: F401
     from .tools import makedocx  # noqa: F401
     from .tools import makepdf  # noqa: F401
     from .tools import makexlsx  # noqa: F401
@@ -59,8 +65,10 @@ def main():
     from .tools import organize  # noqa: F401
     from .tools import password  # noqa: F401
     from .tools import pdf  # noqa: F401
+    from .tools import power  # noqa: F401  (shutdown_jarvis)
     from .tools import recent  # noqa: F401
     from .tools import recycle  # noqa: F401
+    from .tools import runner  # noqa: F401
     from .tools import reminders as reminder_store  # noqa: F401
     from .tools import search  # noqa: F401
     from .tools import shell  # noqa: F401
@@ -79,8 +87,9 @@ def main():
 
     apps.set_extra_apps(cfg.get("apps") or {})
 
-    from .voice.tts import Speaker
-    speaker = Speaker()
+    from .voice import tts
+    speaker = tts.build(cfg)
+    voice_engine = type(speaker).__name__.replace("Speaker", "").lower()
     camera.init(cfg, speaker)
 
     from .voice.hud import create as create_hud
@@ -120,8 +129,49 @@ def main():
 
     threading.Thread(target=_reminder_watch, daemon=True).start()
 
+    def _teardown():
+        """Shut everything down cleanly. Safe to call more than once."""
+        stop_reminders.set()
+        try:
+            speaker.stop()
+        except Exception:
+            pass
+        try:
+            hud.shutdown()
+        except Exception:
+            pass
+        try:
+            camera.shutdown()
+        except Exception:
+            pass
+        if browser_ok:
+            try:
+                from .tools import browser as b
+                b.shutdown()
+            except Exception:
+                pass
+
+    # Jarvis can shut himself down (the shutdown_jarvis tool sets this flag from
+    # inside a reply). Wait for it here, let the spoken farewell finish, then
+    # tear down and exit the process -- the blocking input() below can't do that
+    # itself once a voice command has triggered it.
+    from . import control
+
+    def _shutdown_watch():
+        control.SHUTDOWN.wait()
+        time.sleep(0.5)  # let the farewell reach the speaker queue
+        deadline = time.monotonic() + 15
+        while speaker.speaking.is_set() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        _teardown()
+        os._exit(0)
+
+    threading.Thread(target=_shutdown_watch, daemon=True).start()
+
     n_mem = memory_store.count()
     mem_status = f"{n_mem} fact{'s' if n_mem != 1 else ''} remembered" if n_mem else "empty"
+    n_lessons = lesson_store.count()
+    lesson_status = f"{n_lessons} learned" if n_lessons else "none yet"
     n_todo = task_list.open_count()
     todo_status = f"{n_todo} open task{'s' if n_todo != 1 else ''}" if n_todo else "clear"
     n_rem = reminder_store.pending_count()
@@ -134,8 +184,10 @@ def main():
     rule = "-" * 64
     print(rule)
     print(f"model: {cfg['models']['chat']} | vision: {cfg['models']['vision']}"
-          f" | voice: {voice_status} | browser tools: {'on' if browser_ok else 'off'}")
-    print(f"memory: {mem_status} | to-do: {todo_status} | reminders: {rem_status}"
+          f" | voice: {voice_status} [{voice_engine}]"
+          f" | browser tools: {'on' if browser_ok else 'off'}")
+    print(f"memory: {mem_status} | lessons: {lesson_status} | to-do: {todo_status}"
+          f" | reminders: {rem_status}"
           f"  ({len(registry.specs())} tools online)")
     print(rule)
     print(_greeting())
@@ -155,8 +207,11 @@ def main():
           "what's in my export.json / "
           "get models.chat from my config.json / "
           "convert my data.csv to json / "
+          "run the tests in my project / "
+          "install the packages in my project in the background / "
           "find my resume / read my resume.docx / read my resume.pdf / "
           "which file mentions the wifi password / "
+          "search my code for the run_project function / "
           "what did I work on today / rename that file to notes_final.txt / "
           "make a folder called taxes in documents / "
           "move my taxes folder into documents / "
@@ -165,6 +220,7 @@ def main():
           "find duplicate files in my downloads / "
           "tell me about my resume.docx / "
           "compare my draft.txt and final.txt / "
+          "change the port to 8080 in my config.txt / "
           "open my downloads folder / "
           "back up my documents into a zip / unzip my backup / "
           "delete that old draft to the recycle bin / "
@@ -180,14 +236,10 @@ def main():
             continue
         if text.lower() in ("exit", "quit", "bye"):
             print("jarvis> Goodbye, sir.")
-            stop_reminders.set()
             speaker.say("Goodbye, sir.")
-            speaker.stop()
-            hud.shutdown()
-            camera.shutdown()
-            if browser_ok:
-                from .tools import browser as b
-                b.shutdown()
+            while speaker.speaking.is_set():
+                time.sleep(0.05)
+            _teardown()
             sys.exit(0)
         hud.state("thinking")
         import time as _time

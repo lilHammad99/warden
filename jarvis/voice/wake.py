@@ -16,12 +16,18 @@ class WakeListener:
         )
         self.threshold = threshold
 
-    def wait_for_wake(self, should_stop=lambda: False, on_level=None) -> bool:
+    def wait_for_wake(self, should_stop=lambda: False, on_level=None,
+                      threshold=None) -> bool:
         """Block until the wake word is heard. Returns False if stopped.
 
         on_level(0..1), if given, is called each chunk with the current mic
         loudness so a UI can show that the mic is picking up sound.
+
+        threshold overrides the default detection threshold for this call --
+        used for barge-in, where Jarvis's own voice is in the mic and we want a
+        stricter bar so his speech can't accidentally trigger the wake word.
         """
+        thr = self.threshold if threshold is None else threshold
         self.model.reset()
         with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                             blocksize=CHUNK) as stream:
@@ -32,6 +38,6 @@ class WakeListener:
                     rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
                     on_level(min(1.0, rms / 4000.0))
                 scores = self.model.predict(samples)
-                if any(v >= self.threshold for v in scores.values()):
+                if any(v >= thr for v in scores.values()):
                     return True
         return False

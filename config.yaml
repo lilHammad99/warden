@@ -21,6 +21,20 @@ voice:
   wake_threshold: 0.4   # 0.0-1.0; lower = more sensitive (easier to trigger)
   stt_model: small
   stt_language: en
+  engine: auto          # auto | piper | sapi. auto uses the human Piper voice
+                        # if models/piper is present, else the Windows voice.
+  piper_voice: en_GB-northern_english_male-medium   # refined RP British male (film-JARVIS accent)
+                        # swap to en_GB-alan-medium for a warmer, softer voice
+  # --- delivery & tone: the calm, cinematic JARVIS feel (Piper voice only) ---
+  piper_length_scale: 1.15     # >1 = slower, more measured. 1.0 = default speed
+  piper_noise_scale: 0.5       # lower = steadier/more composed (Piper default 0.667)
+  piper_sentence_pause: 0.45   # seconds of silence between sentences
+  warmth: true                 # warm EQ + a subtle room reverb for a filmic tone
+  warmth_reverb: 0.18          # 0 = dry, up to ~0.3 for more space
+  barge_in: true        # say "Hey Jarvis" while he's talking to cut in and stop him
+  follow_up: question   # question = keep listening after he asks you something
+                        # (no wake word needed); always = after every reply; off
+  follow_up_seconds: 9  # how long the mic stays open waiting for your answer
 
 hud:
   enabled: true          # the floating "Jarvis orb" that shows it's listening

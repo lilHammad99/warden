@@ -91,6 +91,31 @@ def _stats_line(label: str, text: str, note: str = "") -> str:
     return head
 
 
+_REQUEST_RE = re.compile(
+    r"\b(?:how many (?:words|characters)|word count|count (?:the )?words)\b",
+    re.I)
+_QUOTES = "\"'“”‘’"
+_QUOTED_RE = re.compile(f"[{_QUOTES}]([^{_QUOTES}]{{3,}})[{_QUOTES}]")
+
+
+def _strip_counting_request(value: str) -> str:
+    """The model routinely passes the user's WHOLE question as the text to
+    measure ("how many words are in this sentence: ..."), so the question gets
+    counted along with the sentence. When the text still carries the counting
+    request, measure only the quoted span, or whatever follows the colon.
+    Text without a counting request is returned untouched, so ordinary prose
+    (and an ordinary colon) is never trimmed."""
+    if not value or not _REQUEST_RE.search(value):
+        return value
+    quoted = _QUOTED_RE.search(value)
+    if quoted:
+        return quoted.group(1).strip()
+    _, sep, tail = value.partition(":")
+    if sep and tail.strip():
+        return tail.strip()
+    return value
+
+
 def _looks_like_path(value: str) -> bool:
     """True if a directly-passed 'text' value is really a file reference the
     model dropped into the wrong field: a single line, no spaces, with a path
@@ -182,6 +207,7 @@ def count_words(text: str = "", path: str = "", **extra) -> str:
 
     text_raw = _first_str(text, extra.get("content"), extra.get("string"),
                           extra.get("body"), extra.get("words"))
+    text_raw = _strip_counting_request(text_raw)
 
     # a filename dropped into the 'text' field (a common 8B slip) -> treat as a
     # file, so "count the words in essay.txt" still works.

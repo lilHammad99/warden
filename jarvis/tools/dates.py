@@ -167,8 +167,11 @@ def weekday(date: str = "") -> str:
 @tool(
     "days_until",
     "Return how many days from today until a given date (deadlines, birthdays, "
-    "'how long until ...'). Positive means it is in the future, negative means "
-    "it has already passed. Give the date as YYYY-MM-DD (or a month name).",
+    "'how long until ...', 'how many days between today and ...'). This is the "
+    "ONLY correct way to count days from today to a date -- do not add or "
+    "subtract dates yourself. Positive means it is in the future, negative "
+    "means it has already passed. Give the date as YYYY-MM-DD (or a month "
+    "name).",
     {
         "type": "object",
         "properties": {
@@ -222,7 +225,9 @@ def days_between(start: str = "", end: str = "") -> str:
     "Return the date a number of days from a starting date. Use for 'what's the "
     "date 90 days from now?' or '3 weeks after 2026-01-01'. Positive days go "
     "forward, negative go back. If no base date is given, today is used. Pass "
-    "weeks as a shortcut for 7-day steps.",
+    "weeks as a shortcut for 7-day steps. This does NOT count how many days "
+    "lie between two dates -- for that use days_until (from today) or "
+    "days_between (any two dates), and never work the number out yourself.",
     {
         "type": "object",
         "properties": {

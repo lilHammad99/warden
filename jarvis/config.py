@@ -22,6 +22,20 @@ DEFAULTS = {
         "wake_threshold": 0.4,
         "stt_model": "small",
         "stt_language": "en",
+        "engine": "auto",                  # auto | piper | sapi
+        # refined RP British male (the film-JARVIS accent). en_GB-alan-medium is
+        # the warmer alternative — both are in models/piper/voices.
+        "piper_voice": "en_GB-northern_english_male-medium",
+        # --- delivery & tone (Piper only): the "calm, cinematic JARVIS" feel ---
+        "piper_length_scale": 1.15,        # >1 = slower, more measured
+        "piper_noise_scale": 0.5,          # lower = steadier/composed (default 0.667)
+        "piper_noise_w": 0.7,              # phoneme-timing variability
+        "piper_sentence_pause": 0.45,      # seconds of silence between sentences
+        "warmth": True,                    # warm EQ + a touch of room reverb
+        "warmth_reverb": 0.18,             # 0 = dry; wet mix of the subtle reverb
+        "barge_in": True,                  # interrupt speech by saying "Hey Jarvis"
+        "follow_up": "question",           # question | always | off
+        "follow_up_seconds": 9,
     },
     "hud": {"enabled": True, "corner": "bottom-right"},
     "apps": {},

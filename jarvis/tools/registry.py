@@ -34,9 +34,13 @@ _TOOLS: dict[str, dict] = {}
 # offer is never truly lost -- the model can find it via list_tools.
 _CORE = {
     "today", "calculate", "convert_units", "count_words",
-    "write_file", "read_file", "find_files", "search_files",
+    "write_file", "read_file", "edit_file", "find_files", "search_files",
+    "search_code",
     "open_app", "open_website", "web_search",
-    "run_command", "remember", "recall", "add_task", "list_tasks",
+    "run_command", "run_project_command",
+    "start_background_command", "check_background_command",
+    "remember", "recall", "learn_lesson",
+    "add_task", "list_tasks",
     "describe_view", "start_working", "stop_working", "list_tools",
 }
 
@@ -89,14 +93,17 @@ def specs() -> list[dict]:
     return [t["spec"] for t in _TOOLS.values()]
 
 
-def specs_for(text: str, limit: int = 24) -> list[dict]:
+def specs_for(text: str, max_extra: int = 14) -> list[dict]:
     """The subset of tools to offer the model for THIS question.
 
-    A small local model chooses badly when shown all ~70 tools at once, so we
-    always offer the core set plus the non-core tools whose keywords the
-    question actually mentions, ranked by overlap, up to `limit` total. Ties
-    break alphabetically for a stable offer. dispatch() is unaffected -- it
-    still runs any registered tool the model names."""
+    A small local model chooses badly when shown all ~80 tools at once, so we
+    always offer the core set plus up to `max_extra` non-core tools whose
+    keywords the question actually mentions, ranked by overlap. Ties break
+    alphabetically for a stable offer. `max_extra` counts ONLY the keyword
+    extras, kept independent of the core size on purpose: coupling the cap to a
+    total once let a growing core crowd every extra out (room hit 0), silently
+    withholding tools like date_add. dispatch() is unaffected -- it still runs
+    any registered tool the model names."""
     core = [(n, t["spec"]) for n, t in _TOOLS.items() if n in _CORE]
     user_kw = _words(text)
     scored = []
@@ -107,8 +114,7 @@ def specs_for(text: str, limit: int = 24) -> list[dict]:
         if score:
             scored.append((-score, n, t["spec"]))
     scored.sort()  # highest score first, then name
-    room = max(0, limit - len(core))
-    extra = [spec for _, _, spec in scored[:room]]
+    extra = [spec for _, _, spec in scored[:max(0, max_extra)]]
     return [spec for _, spec in core] + extra
 
 

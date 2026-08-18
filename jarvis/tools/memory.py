@@ -14,6 +14,7 @@ the model can read and recover from.
 """
 
 import json
+import re
 import threading
 from datetime import datetime
 
@@ -81,12 +82,37 @@ def _clean(value, limit: int) -> tuple[str, bool]:
 # --------------------------------------------------------------------------
 # tools exposed to the model
 # --------------------------------------------------------------------------
+# A tool result is not a durable fact: handed the output of get_time / today /
+# get_weather, the model calls remember with it ("Today is Tuesday, 18 August
+# 2026, 06:19 PM"), which is false by tomorrow and crowds out real facts. These
+# match a fact ASSERTING the current moment, not one that merely mentions a
+# date or the weather ("Alex's birthday is on 12 March" is still stored).
+_TRANSIENT_RES = (
+    re.compile(r"^\s*(?:today|the date)\s+is\b", re.I),
+    re.compile(r"\b(?:the\s+)?(?:current|present)\s+(?:time|date|weather|"
+               r"temperature)\b", re.I),
+    re.compile(r"\bthe\s+time\s+is\b", re.I),
+    re.compile(r"\bright\s+now\s+it\s+is\b", re.I),
+    re.compile(r"\bit\s+is\s+(?:currently\s+)?\d{1,2}[:.]\d{2}\b", re.I),
+    re.compile(r"\bthe\s+weather\s+(?:in\s+.{1,40}?\s+)?is\b", re.I),
+    re.compile(r"\btemperature\s+of\s+-?\d", re.I),
+)
+
+
+def _is_transient(text: str) -> bool:
+    """True if this 'fact' just restates the current moment (what get_time /
+    today / get_weather returned) rather than something durable."""
+    return any(rx.search(text) for rx in _TRANSIENT_RES)
+
+
 @tool(
     "remember",
     "Save one important, durable fact about the user or their world to "
     "long-term memory so you still know it after a restart. Use it when the "
     "user tells you to remember something, or shares a lasting preference, "
-    "name, schedule, or where something is. One short fact per call.",
+    "name, schedule, or where something is. One short fact per call. Never "
+    "store what another tool just told you -- the time, today's date, the "
+    "weather -- those are passing details; just answer the user with them.",
     {
         "type": "object",
         "properties": {
@@ -99,6 +125,10 @@ def remember(fact: str = "") -> str:
     text, truncated = _clean(fact, MAX_FACT_LEN)
     if not text:
         return "Error: nothing to remember — the 'fact' was empty, sir."
+    if _is_transient(text):
+        return ("Error: that's a passing detail (the current date, time or "
+                "weather), not a durable fact, sir — it would be wrong "
+                "tomorrow. Answer the user with it instead of storing it.")
     with _LOCK:
         facts = _load()
         for f in facts:
