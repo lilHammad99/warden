@@ -1,0 +1,59 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: smoke tests (offline subset)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Only the pure-Python dependencies. The rest of requirements.txt pulls in
+      # torch, OpenCV and audio bindings for the camera, voice and browser
+      # tools, none of which a headless runner can exercise anyway.
+      - name: Install pure-Python dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pyyaml pypdf openpyxl fpdf2 python-docx
+
+      - name: Compile every source file
+        shell: pwsh
+        run: python -m compileall -q jarvis tests
+
+      # The sections that need no model, no network and no hardware. Sections
+      # left out either need Ollama (mind, agentguard, dispatch), a real device
+      # (camera, vision, tts, hud, watch), the network (network), or Windows
+      # shell APIs that a runner does not provide (recycle, clipboard,
+      # explorer, shell, runner, background, reminders).
+      - name: Run the offline smoke sections
+        shell: pwsh
+        run: |
+          $sections = @(
+            'memory','lessons','writers','find','search','codesearch','recent',
+            'organize','movefolder','copyfolder','makefolder','duplicates',
+            'fileinfo','compare','edit','disk','document','pdf','excel',
+            'archive','extract','tasks','calc','dates','convert','textstats',
+            'numstats','password','textcodec','textextract','spreadsheet',
+            'jsondata','convertdata'
+          )
+          $failed = @()
+          foreach ($s in $sections) {
+            Write-Host "::group::$s"
+            python -m tests.smoke $s
+            if ($LASTEXITCODE -ne 0) { $failed += $s }
+            Write-Host "::endgroup::"
+          }
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::failing sections: $($failed -join ', ')"
+            exit 1
+          }
+          Write-Host "all $($sections.Count) sections passed"
