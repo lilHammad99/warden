@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 
+from . import __version__
 from . import config as config_mod
 from .agent import Agent
 
@@ -183,6 +184,7 @@ def main():
     print(BANNER)
     rule = "-" * 64
     print(rule)
+    print(f"Warden v{__version__}")
     print(f"model: {cfg['models']['chat']} | vision: {cfg['models']['vision']}"
           f" | voice: {voice_status} [{voice_engine}]"
           f" | browser tools: {'on' if browser_ok else 'off'}")

@@ -3,14 +3,14 @@
 **Date:** 2026-08-01
 **Status:** approved by the user, building
 **Goal:** Give Jarvis a persistent "how to think" self, so the local 8B brain
-carries itself more like Claude — stays on the thread, admits what it doesn't
+carries itself more like a frontier assistant — stays on the thread, admits what it doesn't
 know instead of inventing, and doesn't give up after one try — and can learn
 short lessons from experience.
 
 ## Why
 
 Jarvis's brain (`qwen3:8b`) is fixed by the hardware. The lever for making it
-feel closer to Claude is the *harness* around the model, not the model. Today
+feel closer to one is the *harness* around the model, not the model. Today
 the identity ("You are Jarvis… address the user as sir") is one line buried at
 the top of a ~250-line tool-rules prompt, and there is no notion of Jarvis
 improving itself. This adds a real "mind" at the front of the prompt plus an

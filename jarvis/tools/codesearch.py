@@ -1,6 +1,6 @@
 """Grep-style regex code search for Jarvis.
 
-This is Claude Code's own ``Grep``: search the CONTENTS of files in a project
+This is a developer-grade ``grep``: search the CONTENTS of files in a project
 folder for a **regular expression** and return the file, line number and line
 for every match. It is the tool Jarvis uses to NAVIGATE a codebase before it
 edits it -- "where is this function defined", "find every call to set_volume",

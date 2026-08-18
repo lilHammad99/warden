@@ -10,7 +10,7 @@ notes that is a real hazard: a one-line fix should not risk the other 200 lines.
 ``edit_file`` does what a code editor does -- find an exact piece of text and
 replace it, leaving everything else untouched -- so Jarvis can iterate on a file
 ("change the port to 8080 in my config", "rename that function", "fix that
-typo", "update the version number") the way Claude Code does.
+typo", "update the version number").
 
 Safety model (the strict handling the project asks for, because an 8B local
 model WILL eventually pass junk, the wrong type, or aim at the wrong text):

@@ -7,7 +7,7 @@ a dev server (``npm run dev``, ``python -m http.server``) that never exits at
 all. This module starts the same kind of command WITHOUT waiting: it returns a
 short job id immediately, and later calls report the job's output and whether it
 has finished. So Jarvis can kick off a long job, answer other questions, and
-check back -- the way Claude Code runs a long build in the background.
+check back later, instead of freezing the conversation until it ends.
 
 Three tools:
 

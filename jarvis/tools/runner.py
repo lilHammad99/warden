@@ -7,7 +7,7 @@ script.py``, ``pytest``, ``pip install requests``, ``npm test``, ``git status``
 -- inside a specific project directory, capturing the output, the errors and the
 exit code so the model can see whether what it built works and fix it if not.
 It is the piece that turns "Jarvis can write files" into "Jarvis can build and
-run a small project", the way Claude Code does.
+run a small project".
 
 Safety model (strict, because an 8B local model WILL eventually emit junk):
 

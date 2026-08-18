@@ -1,6 +1,6 @@
 # HANDOFF — Jarvis build status (2026-07-31)
 
-Read this first if you are a new Claude session taking over.
+Read this first if you are picking the project up.
 
 ## What this project is
 
@@ -1120,7 +1120,7 @@ the missing verb in the write family. Until now the only way to CHANGE something
 already in a file was `write_file`, which overwrites the WHOLE file -- so the 8B
 model had to reproduce every other line perfectly or silently lose the rest. For
 a small local model iterating on code/config/notes that is a real hazard. This is
-Claude Code's own Edit tool: find an exact piece of text and replace it, leaving
+what a code editor does: find an exact piece of text and replace it, leaving
 everything else untouched. Answers "change the port to 8080 in my config", "fix
 that typo", "rename that function", "update the version number".
 - Args `path` + `old` (exact existing text) + `new` (replacement; empty `new`
@@ -1162,7 +1162,7 @@ that typo", "rename that function", "update the version number".
 Added `run_project_command` (`jarvis/tools/runner.py`): the biggest missing
 CODE-BUILDING verb. Jarvis could already write and edit files but could NEVER
 RUN them, so it couldn't tell whether the code it produced actually works -- the
-core thing Claude Code does. Now it runs a real build/dev command inside a
+core thing a coding assistant does. Now it runs a real build/dev command inside a
 project folder and gets back the stdout, stderr and exit code, so it can run a
 script, run tests, install a package or check a repo and SEE the result ("run my
 script", "run the tests", "does it work", "pip install requests", "npm install",
@@ -1217,8 +1217,8 @@ flagged as next. `run_project_command` runs a command and WAITS for it, which
 blocks Jarvis's single-threaded turn -- fine for a quick script, bad for a slow
 `pip install`/`npm install`, a long test suite, or a dev server (`npm run dev`,
 `python -m http.server`) that never exits. Jarvis can now kick a long job off,
-keep talking, and check back -- the way Claude Code runs a build in the
-background. Pure stdlib, NO new dependency.
+keep talking, and check back later instead of freezing the conversation until
+the job ends. Pure stdlib, NO new dependency.
 - **Reuses the runner's whole safety model, not a copy of it.** runner.py's
   command+directory validation was refactored out into a shared
   `_resolve_command_and_dir()` (plus a shared `_where()`), and BOTH
@@ -1270,10 +1270,10 @@ background. Pure stdlib, NO new dependency.
 ## 2026-08-01 — Grep-style code search (regex + file glob) (Phase 47)
 
 Added `search_code` (`jarvis/tools/codesearch.py`): the code-navigation verb
-Phase 46 flagged as next, and the last major missing piece of Claude Code's
-core toolset. Jarvis could WRITE, EDIT and RUN code but had no way to SEARCH a
+Phase 46 flagged as next, and the last major missing piece of the
+code-handling toolset. Jarvis could WRITE, EDIT and RUN code but had no way to SEARCH a
 codebase, so before editing an unfamiliar project it was navigating blind. This
-is Claude Code's own `Grep`: search file CONTENTS for a **regular expression**
+is a developer-grade `grep`: search file CONTENTS for a **regular expression**
 and get back each file with the line number and line ("where is run_project
 defined", "find every call to set_volume", "grep for TODO|FIXME", "find
 `import requests`"). It completes the finder trio -- `find_files` (by NAME),
@@ -1424,7 +1424,7 @@ desktop...`, `start working`, `what do you see`, voice "Hey Jarvis".
 3. Voice ("Hey Jarvis") + text console ✅ coded
 4. Agentic abilities: write files/essays on Desktop, open apps/sites,
    system control, web answers, HEADED browser Jarvis controls ✅ coded
-5. Update Claude memory when done + keep ROADMAP.md current ⬅ REMEMBER
+5. Update the project notes when done + keep ROADMAP.md current ⬅ REMEMBER
 6. User is not deeply technical: keep instructions simple, README friendly.
 
 ## Immediate next steps for whoever takes over
@@ -1432,7 +1432,7 @@ desktop...`, `start working`, `what do you see`, voice "Hey Jarvis".
 1. Wait/verify downloads (`ollama list`; pip job; see TODO above)
 2. Run smoke tests in order, fix what breaks
 3. Update ROADMAP.md checkboxes + HANDOFF.md as things pass
-4. Write Claude memory files (project + user preferences) per memory rules
+4. Write the project notes (project + user preferences) per the notes rules
 5. Tell the user how to start Jarvis (`run.bat`) and what to try
 
 ## 2026-08-18 — Second model bake-off (bigger brain REJECTED again) + 4 agent-loop fixes
