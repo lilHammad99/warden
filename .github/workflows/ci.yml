@@ -43,7 +43,7 @@ jobs:
             'fileinfo','compare','edit','disk','document','pdf','excel',
             'archive','extract','tasks','calc','dates','convert','textstats',
             'numstats','password','textcodec','textextract','spreadsheet',
-            'jsondata','convertdata'
+            'jsondata','convertdata','plaintext'
           )
           $failed = @()
           foreach ($s in $sections) {

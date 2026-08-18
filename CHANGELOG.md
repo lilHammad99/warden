@@ -7,6 +7,17 @@ All notable changes to this project are recorded here. The format follows
 Versions below 1.0.0 were tagged retrospectively from the development history;
 the project was private until 1.0.0.
 
+## [Unreleased]
+
+### Fixed
+- Replies no longer come back as LaTeX. The model typeset maths in TeX
+  (`$ \frac{15}{100} \times 240 $`) despite the mind forbidding markdown,
+  which is unintelligible when read aloud. The mind now rules out LaTeX
+  explicitly, and `jarvis/plaintext.py` normalises the reply where it leaves
+  the agent, so the console, voice and HUD all get plain prose. The guard is
+  delimiter-scoped, so Windows paths, prices and file names with underscores
+  are untouched.
+
 ## [1.0.0] — 2026-08-18
 
 First public release, as **Warden**.
