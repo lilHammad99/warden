@@ -1,7 +1,8 @@
-# Jarvis — your local AI assistant
+# Warden — your local AI assistant
 
-Iron-Man-style assistant that runs 100% on this PC. It talks, listens,
-sees your cameras, writes files, opens apps, and drives its own browser.
+An assistant that watches and acts, running 100% on this PC. It talks,
+listens, sees your cameras, writes files, opens apps, and drives its own
+browser. No cloud model, no account, nothing leaves the machine.
 
 ## Start it
 
@@ -15,6 +16,10 @@ Requirements already set up: Python venv in `.venv`, Ollama with
 - **Voice:** say **"Hey Jarvis"**, wait for "Yes, sir?", then speak.
 - **Text:** just type in the console.
 
+The spoken wake phrase is still "Hey Jarvis" — it comes from openWakeWord's
+pretrained model, and a new phrase needs a custom-trained one. Set
+`voice.wake_word` in `config.yaml` to use a different bundled phrase.
+
 ## Things to try
 
 | Say / type | What happens |
@@ -26,7 +31,7 @@ Requirements already set up: Python venv in `.venv`, Ollama with
 | `open chrome` / `open youtube` | Opens apps and sites |
 | `how is my battery?` | System status |
 | `search the web for today's weather in Lisbon` | Web answers |
-| `use your browser to open wikipedia and search for Mars` | Jarvis drives a visible browser |
+| `use your browser to open wikipedia and search for Mars` | Drives a visible browser |
 
 ## Add your IP / CCTV cameras
 
@@ -46,3 +51,5 @@ Then: `start working on front door`.
 - `config.yaml` — models, cameras, voice settings, app aliases
 - `data/snapshots/` — photos saved when watch mode sees someone
 - `docs/ROADMAP.md` — what's next; `docs/DESIGN.md` — how it works
+
+The Python package is still named `jarvis/`, from the project's working title.

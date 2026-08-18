@@ -4,9 +4,10 @@ Read this first if you are a new Claude session taking over.
 
 ## What this project is
 
-Local Iron-Man-style AI assistant, kept in the owner's own project folder
-(git repo). Everything local: Ollama brain, camera vision, voice,
-file/app/system/browser tools.
+Local AI assistant that watches and acts, kept in the owner's own project
+folder (git repo). Everything local: Ollama brain, camera vision, voice,
+file/app/system/browser tools. Published as **Warden**; the package is still
+`jarvis/` and the wake phrase is still "Hey Jarvis" (pretrained model).
 See `docs/DESIGN.md` (architecture) and `docs/ROADMAP.md` (future work).
 Older reference copies may sit in the parent folder — do not touch them.
 

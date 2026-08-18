@@ -1,8 +1,12 @@
-# Jarvis — Design (2026-07-29)
+# Warden — Design (2026-07-29)
 
-A local, Iron-Man-style AI assistant for Windows. Everything runs on this PC:
-the brain (Ollama), the eyes (webcam + IP cameras), the voice (local STT/TTS),
-and the hands (files, apps, system, headed browser).
+A local AI assistant for Windows that watches and acts. Everything runs on this
+PC: the brain (Ollama), the eyes (webcam + IP cameras), the voice (local
+STT/TTS), and the hands (files, apps, system, headed browser).
+
+Named Warden; the Python package is still `jarvis/`, from the working title,
+and the spoken wake phrase is still "Hey Jarvis" (pretrained openWakeWord
+model).
 
 ## Goals
 
